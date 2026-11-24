@@ -1,0 +1,25 @@
+From c9ebae9c251cca396e925650a8e441f84f9aca4e Mon Sep 17 00:00:00 2001
+From: pkg <pkg@localhost>
+Date: Tue, 24 Nov 2026 17:25:59 +0100
+Subject: [PATCH 1/7] telemetry: product analytics off by default
+
+---
+ apps/server/src/telemetry/AnalyticsService.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/apps/server/src/telemetry/AnalyticsService.ts b/apps/server/src/telemetry/AnalyticsService.ts
+index 384da92..d3ebcbb 100644
+--- a/apps/server/src/telemetry/AnalyticsService.ts
++++ b/apps/server/src/telemetry/AnalyticsService.ts
+@@ -71,7 +71,7 @@ const TelemetryEnvConfig = Config.all({
+   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(
+     Config.withDefault("https://ingest.t3.codes"),
+   ),
+-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
++  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
+   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
+   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
+     Config.withDefault(1_000),
+-- 
+2.56.0
+

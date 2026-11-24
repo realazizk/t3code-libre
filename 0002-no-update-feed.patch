@@ -1,0 +1,42 @@
+From f5b1a57118ed52641cf3808dd2fcdcc42f039bfe Mon Sep 17 00:00:00 2001
+From: pkg <pkg@localhost>
+Date: Tue, 24 Nov 2026 17:25:59 +0100
+Subject: [PATCH 2/7] no GitHub update feed in builds
+
+---
+ scripts/build-desktop-artifact.ts | 19 +++++++------------
+ 1 file changed, 7 insertions(+), 12 deletions(-)
+
+diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
+index 9d34e24..b1b389a 100644
+--- a/scripts/build-desktop-artifact.ts
++++ b/scripts/build-desktop-artifact.ts
+@@ -2819,18 +2819,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+   const updateChannel = resolveDesktopUpdateChannel(version);
+   // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
+   buildConfig.publish = null;
+-  if (!isDesktopPreviewVersion(version)) {
+-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+-    if (publishConfig) {
+-      buildConfig.publish = [publishConfig];
+-    } else if (mockUpdates) {
+-      buildConfig.publish = [
+-        {
+-          provider: "generic",
+-          url: resolveMockUpdateServerUrl(mockUpdateServerPort),
+-        },
+-      ];
+-    }
++  if (!isDesktopPreviewVersion(version) && mockUpdates) {
++    buildConfig.publish = [
++      {
++        provider: "generic",
++        url: resolveMockUpdateServerUrl(mockUpdateServerPort),
++      },
++    ];
+   }
+ 
+   if (platform === "mac") {
+-- 
+2.56.0
+

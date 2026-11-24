@@ -1,0 +1,32 @@
+# makepkg working dirs
+/src/
+/pkg/
+
+# Downloaded upstream tarball and built packages (publish these as Release assets, not in git)
+*.tar.gz
+*.tar.zst
+*.pkg.tar.*
+*.apk
+*.aab
+*.dmg
+*.AppImage
+
+# Build logs and exit codes
+*.log
+*.exit
+
+# Patched source tree from scripts/prepare-source.sh
+/build/
+
+# Signing material must never be committed
+*.jks
+*.keystore
+*.p12
+*.pass
+.env
+.env.*
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~

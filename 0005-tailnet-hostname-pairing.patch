@@ -1,0 +1,263 @@
+From f633fe7e33ec78402a21cbbbbe0b62d8cc2a36f1 Mon Sep 17 00:00:00 2001
+From: pkg <pkg@localhost>
+Date: Wed, 11 Nov 2026 18:08:52 +0100
+Subject: [PATCH 5/7] tailnet: pair by MagicDNS or tailnet hostname over http
+
+(cherry picked from commit 612f2350b4f1e2eb866e42b7cac598c983c057c1)
+---
+ .../src/backend/DesktopServerExposure.test.ts |  1 +
+ .../backend/tailscaleEndpointProvider.test.ts | 31 ++++++++++++++++
+ .../src/backend/tailscaleEndpointProvider.ts  | 36 +++++++++++++++++--
+ .../src/features/connection/pairing.test.ts   |  9 +++++
+ .../mobile/src/features/connection/pairing.ts | 19 ++--------
+ packages/shared/src/remote.test.ts            | 21 +++++++++--
+ packages/shared/src/remote.ts                 | 21 ++++++++++-
+ 7 files changed, 116 insertions(+), 22 deletions(-)
+
+diff --git a/apps/desktop/src/backend/DesktopServerExposure.test.ts b/apps/desktop/src/backend/DesktopServerExposure.test.ts
+index c222237..274b9d2 100644
+--- a/apps/desktop/src/backend/DesktopServerExposure.test.ts
++++ b/apps/desktop/src/backend/DesktopServerExposure.test.ts
+@@ -475,6 +475,7 @@ describe("DesktopServerExposure", () => {
+                 "http://127.0.0.1:4173/",
+                 "http://192.168.1.20:4173/",
+                 `http://${address}:4173/`,
++                `http://${dnsName}:4173/`,
+                 `https://${dnsName}/`,
+               ],
+             );
+diff --git a/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts b/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
+index 397a757..e3176de 100644
+--- a/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
++++ b/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
+@@ -37,6 +37,37 @@ describe("tailscale endpoint provider", () => {
+     }).pipe(Effect.provide(layerUnusedTailscaleExternalServices)),
+   );
+ 
++  it.effect("offers the MagicDNS name over plain http only next to a tailnet address", () =>
++    Effect.gen(function* () {
++      const statusJson = `{"Self":{"DNSName":"mybox.tail1234.ts.net.","TailscaleIPs":["100.74.126.34"]}}`;
++      const exposed = yield* resolveTailscaleAdvertisedEndpoints({
++        port: 3773,
++        networkInterfaces: { tailscale0: protonAndTailscaleInterfaces.tailscale0 },
++        statusJson,
++        probe: () => Effect.succeed(false),
++      });
++      assert.deepEqual(
++        exposed.map((endpoint) => [endpoint.label, endpoint.httpBaseUrl, endpoint.status]),
++        [
++          ["Tailscale IP", "http://100.74.126.34:3773/", "available"],
++          ["Tailscale MagicDNS", "http://mybox.tail1234.ts.net:3773/", "available"],
++          ["Tailscale HTTPS", "https://mybox.tail1234.ts.net/", "unavailable"],
++        ],
++      );
++
++      const localOnly = yield* resolveTailscaleAdvertisedEndpoints({
++        port: 3773,
++        networkInterfaces: {},
++        statusJson,
++        probe: () => Effect.succeed(false),
++      });
++      assert.deepEqual(
++        localOnly.map((endpoint) => endpoint.label),
++        ["Tailscale HTTPS"],
++      );
++    }).pipe(Effect.provide(layerUnusedTailscaleExternalServices)),
++  );
++
+   it.effect("keeps native Tailscale interfaces with missing, malformed, or stale status", () =>
+     Effect.gen(function* () {
+       for (const interfaceName of ["tailscale0", "Tailscale"]) {
+diff --git a/apps/desktop/src/backend/tailscaleEndpointProvider.ts b/apps/desktop/src/backend/tailscaleEndpointProvider.ts
+index 1b8d9df..e9a76cf 100644
+--- a/apps/desktop/src/backend/tailscaleEndpointProvider.ts
++++ b/apps/desktop/src/backend/tailscaleEndpointProvider.ts
+@@ -85,6 +85,27 @@ const probeServesThisBackend = (localHttpUrl: string) => (baseUrl: string) =>
+     Effect.orElseSucceed(() => false),
+   );
+ 
++/** Plain-http MagicDNS name for the directly exposed backend, so phones can pair by hostname. */
++function resolveTailscaleMagicDnsHttpEndpoint(input: {
++  readonly dnsName: string | null;
++  readonly port: number;
++}): AdvertisedEndpoint | null {
++  if (!input.dnsName) return null;
++  const url = new URL(`http://${input.dnsName}`);
++  url.port = String(input.port);
++  const httpBaseUrl = url.origin;
++  return createAdvertisedEndpoint({
++    provider: TAILSCALE_ENDPOINT_PROVIDER,
++    source: "desktop-addon",
++    id: `tailscale-magicdns-http:${httpBaseUrl}`,
++    label: "Tailscale MagicDNS",
++    httpBaseUrl,
++    reachability: "private-network",
++    status: "available",
++    description: "Reachable by hostname from devices on the same Tailnet.",
++  });
++}
++
+ const resolveTailscaleMagicDnsAdvertisedEndpoint = Effect.fn(
+   "resolveTailscaleMagicDnsAdvertisedEndpoint",
+ )(function* (input: {
+@@ -157,9 +178,20 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
+       ...(input.probe === undefined ? {} : { probe: input.probe }),
+     });
+ 
++    // Only offer the hostname when the backend is reachable on the tailnet interface.
++    const magicDnsHttpEndpoint =
++      ipEndpoints.length > 0
++        ? resolveTailscaleMagicDnsHttpEndpoint({
++            dnsName: status?.magicDnsName ?? null,
++            port: input.port,
++          })
++        : null;
++    const directEndpoints =
++      magicDnsHttpEndpoint === null ? ipEndpoints : [...ipEndpoints, magicDnsHttpEndpoint];
++
+     return Option.match(magicDnsEndpoint, {
+-      onNone: () => ipEndpoints,
+-      onSome: (endpoint) => [...ipEndpoints, endpoint],
++      onNone: () => directEndpoints,
++      onSome: (endpoint) => [...directEndpoints, endpoint],
+     });
+   },
+ );
+diff --git a/apps/mobile/src/features/connection/pairing.test.ts b/apps/mobile/src/features/connection/pairing.test.ts
+index 466fbfa..a5f9766 100644
+--- a/apps/mobile/src/features/connection/pairing.test.ts
++++ b/apps/mobile/src/features/connection/pairing.test.ts
+@@ -15,6 +15,15 @@ describe("buildPairingUrl", () => {
+     );
+   });
+ 
++  it("uses HTTP for a tailnet hostname with the server port", () => {
++    expect(buildPairingUrl("mybox:3773", "pairing-token")).toBe(
++      "http://mybox:3773/#token=pairing-token",
++    );
++    expect(buildPairingUrl("mybox.tail1234.ts.net:3773", "pairing-token")).toBe(
++      "http://mybox.tail1234.ts.net:3773/#token=pairing-token",
++    );
++  });
++
+   it("preserves an explicit scheme for an IP address", () => {
+     expect(buildPairingUrl("https://192.168.1.100:3773", "pairing-token")).toBe(
+       "https://192.168.1.100:3773/#token=pairing-token",
+diff --git a/apps/mobile/src/features/connection/pairing.ts b/apps/mobile/src/features/connection/pairing.ts
+index d596343..34bec26 100644
+--- a/apps/mobile/src/features/connection/pairing.ts
++++ b/apps/mobile/src/features/connection/pairing.ts
+@@ -1,4 +1,4 @@
+-import { readHostedPairingRequest } from "@t3tools/shared/remote";
++import { defaultSchemeForHost, readHostedPairingRequest } from "@t3tools/shared/remote";
+ import * as Schema from "effect/Schema";
+ import { msg } from "gt-react-native";
+ 
+@@ -6,21 +6,6 @@ import { m } from "../../i18n/messages";
+ 
+ const MOBILE_PAIRING_URL_PARAM = "pairingUrl";
+ 
+-function isIpLiteral(host: string): boolean {
+-  try {
+-    const hostname = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "");
+-    if (hostname.includes(":")) return true;
+-
+-    const octets = hostname.split(".");
+-    return (
+-      octets.length === 4 &&
+-      octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+-    );
+-  } catch {
+-    return false;
+-  }
+-}
+-
+ export class PairingQrPayloadEmptyError extends Schema.TaggedError<PairingQrPayloadEmptyError>()(
+   "PairingQrPayloadEmptyError",
+   {},
+@@ -37,7 +22,7 @@ export function buildPairingUrl(host: string, code: string): string {
+   if (!c) return h;
+ 
+   try {
+-    const url = new URL(h.includes("://") ? h : `${isIpLiteral(h) ? "http" : "https"}://${h}`);
++    const url = new URL(h.includes("://") ? h : `${defaultSchemeForHost(h)}://${h}`);
+     url.hash = new URLSearchParams([["token", c]]).toString();
+     return url.toString();
+   } catch {
+diff --git a/packages/shared/src/remote.test.ts b/packages/shared/src/remote.test.ts
+index 30f30a2..b53f957 100644
+--- a/packages/shared/src/remote.test.ts
++++ b/packages/shared/src/remote.test.ts
+@@ -107,11 +107,28 @@ describe("remote", () => {
+       }),
+     ).toEqual({
+       credential: "pairing-token",
+-      httpBaseUrl: "https://myserver.com:3000/",
+-      wsBaseUrl: "wss://myserver.com:3000/",
++      httpBaseUrl: "http://myserver.com:3000/",
++      wsBaseUrl: "ws://myserver.com:3000/",
+     });
+   });
+ 
++  it.each([
++    ["100.101.102.103:3773", "http://100.101.102.103:3773/"],
++    ["mybox:3773", "http://mybox:3773/"],
++    ["mybox.tail1234.ts.net:3773", "http://mybox.tail1234.ts.net:3773/"],
++    ["mybox.tail1234.ts.net", "https://mybox.tail1234.ts.net/"],
++    ["[fd7a:115c:a1e0::1]:3773", "http://[fd7a:115c:a1e0::1]:3773/"],
++    ["nas.local:3773", "http://nas.local:3773/"],
++    ["egg.tailnet.example.org:3773", "http://egg.tailnet.example.org:3773/"],
++    ["203.0.113.9:3773", "http://203.0.113.9:3773/"],
++    ["myserver.com", "https://myserver.com/"],
++    ["myserver.com:443", "https://myserver.com/"],
++  ])("picks the scheme a direct server speaks for bare host %s", (host, httpBaseUrl) => {
++    expect(resolveRemotePairingTarget({ host, pairingCode: "pairing-token" }).httpBaseUrl).toBe(
++      httpBaseUrl,
++    );
++  });
++
+   it("rejects unsupported direct pairing URL protocols", () => {
+     let pairingUrlError: unknown;
+     try {
+diff --git a/packages/shared/src/remote.ts b/packages/shared/src/remote.ts
+index 69439fe..5b9831c 100644
+--- a/packages/shared/src/remote.ts
++++ b/packages/shared/src/remote.ts
+@@ -76,6 +76,25 @@ export type RemotePairingTargetError = typeof RemotePairingTargetError.Type;
+ const hasSupportedRemoteBackendProtocol = (url: URL): boolean =>
+   SUPPORTED_REMOTE_BACKEND_PROTOCOLS.has(url.protocol);
+ 
++/**
++ * Scheme for an address typed without one. A T3 server reached directly (LAN, tailnet IP,
++ * MagicDNS on any tailnet domain, Headscale included) listens on a port and speaks plain
++ * http; HTTPS (Tailscale Serve, a reverse proxy) sits on the default port. So an explicit
++ * non-443 port or an IP literal means http; a bare name means https. Type https:// to override.
++ */
++export const defaultSchemeForHost = (hostWithPort: string): "http" | "https" => {
++  try {
++    const { hostname, port } = new URL(`http://${hostWithPort}`);
++    const host = hostname.replace(/^\[|\]$/g, "");
++    if (host.includes(":") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return "http";
++    if (port !== "" && port !== "443") return "http";
++    // Single-label names (MagicDNS short names, mDNS-less LAN hosts) have no certificate.
++    return host.includes(".") ? "https" : "http";
++  } catch {
++    return "https";
++  }
++};
++
+ const normalizeRemoteBaseUrl = (
+   rawValue: string,
+   source: RemoteBackendUrlInvalidError["source"],
+@@ -88,7 +107,7 @@ const normalizeRemoteBaseUrl = (
+   const withoutLeadingSlashes = trimmed.replace(/^\/+/, "");
+   const normalizedInput = /^[a-zA-Z][a-zA-Z\d+-]*:\/\//.test(withoutLeadingSlashes)
+     ? withoutLeadingSlashes
+-    : `https://${withoutLeadingSlashes}`;
++    : `${defaultSchemeForHost(withoutLeadingSlashes)}://${withoutLeadingSlashes}`;
+   let url: URL;
+   try {
+     url = new URL(normalizedInput);
+-- 
+2.56.0
+

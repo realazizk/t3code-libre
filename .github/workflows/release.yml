@@ -1,0 +1,317 @@
+# Builds every package from the same patched source and, for a v* tag, publishes them
+# as a GitHub release with SHA256SUMS and signed build provenance (artifact attestations).
+#
+#   Release:   git tag v0.1.11-1 && git push origin v0.1.11-1   (tag = v<pkgver>-<pkgrel>)
+#   Test run:  Actions > Release > Run workflow (builds and uploads artifacts, no release)
+#
+# Android is off until its build fits a standard runner; set the repository variable
+# BUILD_ANDROID=true to build it (and put the signed APK in releases).
+#
+# The APK is built unsigned. A separate job signs it, running only zipalign and apksigner, so no
+# dependency code from the build ever sees the key. Its secrets live in the `android-signing`
+# environment, which only v* tags may deploy to:
+#   ANDROID_KEYSTORE_BASE64    base64 of the .jks keystore
+#   ANDROID_KEYSTORE_ALIAS     key alias
+#   ANDROID_KEYSTORE_PASSWORD  keystore and key password
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Patched source
+    runs-on: ubuntu-24.04
+    outputs:
+      pkgver: ${{ steps.version.outputs.pkgver }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Read version
+        id: version
+        run: |
+          pkgver="$(sed -n 's/^pkgver=//p' PKGBUILD)"
+          pkgrel="$(sed -n 's/^pkgrel=//p' PKGBUILD)"
+          echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
+          echo "version=$pkgver-$pkgrel" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$pkgver-$pkgrel" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match PKGBUILD version v$pkgver-$pkgrel."
+            exit 1
+          fi
+
+      - name: Download upstream release and apply patches
+        run: scripts/prepare-source.sh "$RUNNER_TEMP/build"
+
+      # The only symlink left is a dev-only skills link, which Windows cannot extract.
+      - name: Pack patched source
+        env:
+          PKGVER: ${{ steps.version.outputs.pkgver }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          rm -f "$RUNNER_TEMP/build/t3code-$PKGVER/.claude/skills"
+          mkdir -p dist
+          tar -czf "dist/t3code-libre-$VERSION-source.tar.gz" -C "$RUNNER_TEMP/build" "t3code-$PKGVER"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-source
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  appimage:
+    name: Linux AppImage
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PKGVER: ${{ needs.source.outputs.pkgver }}
+      VERSION: ${{ needs.source.outputs.version }}
+    steps:
+      # The full workspace build starves the standard runner (16 GB RAM) and it drops offline.
+      - name: Free disk space and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 16G /mnt/extra-swap
+          sudo chmod 600 /mnt/extra-swap
+          sudo mkswap /mnt/extra-swap
+          sudo swapon /mnt/extra-swap
+          free -h && df -h /
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-source
+          path: build
+      - name: Extract source
+        working-directory: build
+        run: tar -xzf "t3code-libre-$VERSION-source.tar.gz" && rm "t3code-libre-$VERSION-source.tar.gz"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: build/t3code-${{ env.PKGVER }}/package.json
+      - name: Install build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
+      - name: Build
+        working-directory: build/t3code-${{ env.PKGVER }}
+        run: ../../scripts/ci/build-desktop.sh linux AppImage
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp build/artifacts/*.AppImage "dist/T3-Code-libre-$VERSION-x86_64.AppImage"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-appimage
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows installer
+    needs: source
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      PKGVER: ${{ needs.source.outputs.pkgver }}
+      VERSION: ${{ needs.source.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-source
+          path: build
+      - name: Extract source
+        working-directory: build
+        run: tar -xzf "t3code-libre-$VERSION-source.tar.gz" && rm "t3code-libre-$VERSION-source.tar.gz"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: build/t3code-${{ env.PKGVER }}/package.json
+      - name: Build
+        working-directory: build/t3code-${{ env.PKGVER }}
+        run: ../../scripts/ci/build-desktop.sh win nsis
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp build/artifacts/*.exe "dist/T3-Code-libre-$VERSION-x64-setup.exe"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  arch:
+    name: Arch Linux package
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm
+          deps="$(sed -n 's/^\tmakedepends = //p; s/^\tdepends = //p' .SRCINFO | sed 's/[<>=].*//' | tr '\n' ' ')"
+          pacman -S --noconfirm --needed $deps
+          useradd -m builder
+          chown -R builder: .
+      # makepkg refuses to run as root.
+      - name: Build
+        run: su builder -c "makepkg --noconfirm"
+      - name: Collect
+        run: |
+          mkdir -p dist
+          cp $(ls t3code-*.pkg.tar.zst | grep -v -- -debug-) dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-arch
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  android:
+    name: Android APK (unsigned)
+    needs: source
+    if: vars.BUILD_ANDROID == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PKGVER: ${{ needs.source.outputs.pkgver }}
+    steps:
+      # The full workspace build starves the standard runner (16 GB RAM) and it drops offline.
+      - name: Free disk space and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 16G /mnt/extra-swap
+          sudo chmod 600 /mnt/extra-swap
+          sudo mkswap /mnt/extra-swap
+          sudo swapon /mnt/extra-swap
+          free -h && df -h /
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-source
+          path: build
+      - name: Extract source
+        working-directory: build
+        run: tar -xzf t3code-libre-*-source.tar.gz && rm t3code-libre-*-source.tar.gz
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version-file: build/t3code-${{ env.PKGVER }}/package.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install toolchain and dependencies
+        working-directory: build/t3code-${{ env.PKGVER }}
+        run: ../../scripts/ci/install-toolchain.sh
+      - name: Build
+        working-directory: build/t3code-${{ env.PKGVER }}
+        env:
+          GRADLE_OPTS: -Dorg.gradle.workers.max=2
+          # arm64 only: every current phone, and a quarter of the native C++ compile work, which
+          # otherwise starves the runner until it drops offline.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+        run: apps/mobile/scripts/build-android-private.sh
+      - name: Collect
+        run: |
+          mkdir -p dist
+          apk="$(find "build/t3code-$PKGVER/apps/mobile/android/app/build/outputs/apk/release" -name '*.apk' | head -n 1)"
+          cp "$apk" dist/unsigned.apk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-unsigned
+          path: dist/unsigned.apk
+          if-no-files-found: error
+
+  sign-apk:
+    name: Sign APK
+    needs: [source, android]
+    if: github.ref_type == 'tag' && vars.BUILD_ANDROID == 'true'
+    runs-on: ubuntu-24.04
+    environment: android-signing
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-unsigned
+      - name: Sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/release.jks"
+          trap 'rm -f "$keystore"' EXIT
+          (umask 077 && printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore")
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          mkdir -p dist
+          "$tools/zipalign" -f -p 4 unsigned.apk aligned.apk
+          "$tools/apksigner" sign --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+            --out "dist/t3code-libre-$VERSION-android.apk" aligned.apk
+          "$tools/apksigner" verify --print-certs "dist/t3code-libre-$VERSION-android.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-android
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish release
+    needs: [source, appimage, windows, arch, android, sign-apk]
+    # sign-apk is skipped while Android is off; any failed build still blocks the release.
+    if: github.ref_type == 'tag' && !cancelled() && !contains(needs.*.result, 'failure')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      PKGVER: ${{ needs.source.outputs.pkgver }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          Private build of [T3 Code v$PKGVER](https://github.com/pingdotgg/t3code/releases/tag/v$PKGVER):
+          no analytics, no T3 accounts or T3 Connect relay, no phone-home lookups, and tailnet
+          hostname pairing.
+
+          Every file here was built by GitHub Actions from this repository's patches. Check one with
+          \`sha256sum -c SHA256SUMS --ignore-missing\`, or verify its build provenance with
+          \`gh attestation verify <file> --repo $GITHUB_REPOSITORY\`.
+
+          The Windows installer is not code-signed, so SmartScreen warns the first time you run it.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "T3 Code libre $GITHUB_REF_NAME" \
+            --notes-file notes.md

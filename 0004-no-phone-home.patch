@@ -1,0 +1,307 @@
+From 5993ca6759f2dd235a5b6e2cdb889fb2fe1a0ee9 Mon Sep 17 00:00:00 2001
+From: pkg <pkg@localhost>
+Date: Wed, 11 Nov 2026 18:07:19 +0100
+Subject: [PATCH 4/7] privacy: no favicon services, spellcheck downloads, or
+ automatic update lookups
+
+(cherry picked from commit 897ab32dd6a3de6a8b22db4d0b07ed3be73750e8)
+---
+ .../src/app/DesktopPreReadyPlatform.test.ts   |  1 +
+ .../src/app/DesktopPreReadyPlatform.ts        |  7 ++
+ apps/desktop/src/window/DesktopWindow.ts      |  2 +
+ .../server/src/provider/ModelManifest.test.ts |  4 +-
+ apps/server/src/provider/ModelManifest.ts     |  3 +-
+ apps/server/src/usage/UsageService.test.ts    |  4 +-
+ apps/server/src/usage/UsageService.ts         |  9 +++
+ packages/contracts/src/settings.ts            |  5 +-
+ packages/shared/src/favicon.test.ts           | 30 +++-----
+ packages/shared/src/favicon.ts                | 71 +++++--------------
+ 10 files changed, 59 insertions(+), 77 deletions(-)
+
+diff --git a/apps/desktop/src/app/DesktopPreReadyPlatform.test.ts b/apps/desktop/src/app/DesktopPreReadyPlatform.test.ts
+index 45887a9..ff8c9c2 100644
+--- a/apps/desktop/src/app/DesktopPreReadyPlatform.test.ts
++++ b/apps/desktop/src/app/DesktopPreReadyPlatform.test.ts
+@@ -34,6 +34,7 @@ const {
+ vi.mock("electron", () => ({
+   app: {
+     setDesktopName: setDesktopNameMock,
++    on: () => undefined,
+     getVersion: () => "0.0.37",
+     isPackaged: true,
+     getAppPath: () => "/tmp/.mount_T3/resources/app.asar",
+diff --git a/apps/desktop/src/app/DesktopPreReadyPlatform.ts b/apps/desktop/src/app/DesktopPreReadyPlatform.ts
+index 8ac4654..3b26aa5 100644
+--- a/apps/desktop/src/app/DesktopPreReadyPlatform.ts
++++ b/apps/desktop/src/app/DesktopPreReadyPlatform.ts
+@@ -183,6 +183,13 @@ export const make = Effect.gen(function* () {
+       }
+     }
+ 
++    // Privacy build: Chromium spellcheck downloads hunspell dictionaries from Google's CDN.
++    // Turn it off for every session (main window, webviews, preview partitions).
++    Electron.app.on("session-created", (created) => {
++      created.setSpellCheckerEnabled(false);
++      created.setSpellCheckerDictionaryDownloadURL("http://127.0.0.1:9/");
++    });
++
+     return { linux, linuxPasswordStoreCommandLine };
+   });
+ }).pipe(Effect.withSpan("desktop.electron.configureBeforeReady"));
+diff --git a/apps/desktop/src/window/DesktopWindow.ts b/apps/desktop/src/window/DesktopWindow.ts
+index 741e03b..b056e26 100644
+--- a/apps/desktop/src/window/DesktopWindow.ts
++++ b/apps/desktop/src/window/DesktopWindow.ts
+@@ -493,6 +493,8 @@ export const make = Effect.gen(function* () {
+         contextIsolation: true,
+         nodeIntegration: false,
+         sandbox: true,
++        // Privacy build: no spellcheck dictionary downloads.
++        spellcheck: false,
+         webviewTag: true,
+         // Guest fullscreen propagates to the embedder; both must opt out to keep it inside the webview.
+         // The app's own fullscreen elements reach OS fullscreen through syncHtmlFullscreen.
+diff --git a/apps/server/src/provider/ModelManifest.test.ts b/apps/server/src/provider/ModelManifest.test.ts
+index 0aac6b4..bdd6c9b 100644
+--- a/apps/server/src/provider/ModelManifest.test.ts
++++ b/apps/server/src/provider/ModelManifest.test.ts
+@@ -261,7 +261,9 @@ const layerService = (input: {
+ }) =>
+   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
+     Layer.provideMerge(NodeServices.layer),
+-    Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
++    Layer.provideMerge(
++      ServerSettings.layerTest({ enableProviderUpdateChecks: true, ...input.settings }),
++    ),
+     Layer.provideMerge(layerHttpClient(input.response)),
+   );
+ 
+diff --git a/apps/server/src/provider/ModelManifest.ts b/apps/server/src/provider/ModelManifest.ts
+index 7d790b4..a68bae1 100644
+--- a/apps/server/src/provider/ModelManifest.ts
++++ b/apps/server/src/provider/ModelManifest.ts
+@@ -251,7 +251,8 @@ export const make = Effect.gen(function* () {
+     const settings = yield* settingsService.getSettings.pipe(
+       Effect.catchCause(() => Effect.succeed(null)),
+     );
+-    if (settings !== null && !settings.enableProviderUpdateChecks) return manifest;
++    // Privacy build: fail closed when settings cannot be read.
++    if (settings === null || !settings.enableProviderUpdateChecks) return manifest;
+ 
+     lastAttemptMs = now;
+     const fetched = yield* httpClient.get(MODEL_MANIFEST_URL).pipe(
+diff --git a/apps/server/src/usage/UsageService.test.ts b/apps/server/src/usage/UsageService.test.ts
+index 0a9b961..7dbab69 100644
+--- a/apps/server/src/usage/UsageService.test.ts
++++ b/apps/server/src/usage/UsageService.test.ts
+@@ -216,7 +216,9 @@ const layerService = (input: {
+     Layer.provideMerge(Layer.succeed(HostProcess.Platform, input.platform ?? "linux")),
+     Layer.provideMerge(Layer.succeed(HostProcess.Hostname, input.hostname ?? "usage-test-host")),
+     Layer.provideMerge(Layer.succeed(HostProcess.HomeDirectory, input.home)),
+-    Layer.provideMerge(ServerSettings.layerTest(input.settings)),
++    Layer.provideMerge(
++      ServerSettings.layerTest({ enableProviderUpdateChecks: true, ...input.settings }),
++    ),
+     Layer.provideMerge(
+       Layer.succeed(
+         HttpClient.HttpClient,
+diff --git a/apps/server/src/usage/UsageService.ts b/apps/server/src/usage/UsageService.ts
+index 30edc90..9f330c4 100644
+--- a/apps/server/src/usage/UsageService.ts
++++ b/apps/server/src/usage/UsageService.ts
+@@ -297,6 +297,15 @@ export const make = Effect.gen(function* () {
+     const maxAgeMs = force ? RATES_REFRESH_FLOOR_MS : RATES_TTL_MS;
+     yield* loadSavedRates;
+     if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < maxAgeMs) return;
++
++    // Privacy build: automatic price-list fetches from GitHub follow the provider update
++    // checks setting (off by default); an explicit refresh still fetches.
++    if (!force) {
++      const settings = yield* settingsService.getSettings.pipe(
++        Effect.catchCause(() => Effect.succeed(null)),
++      );
++      if (settings === null || !settings.enableProviderUpdateChecks) return;
++    }
+     if (ratesLastFailedAtMs !== null && now - ratesLastFailedAtMs < RATES_REFRESH_FLOOR_MS) return;
+ 
+     let fetched = yield* fetchRates(LITELLM_RATES_URL);
+diff --git a/packages/contracts/src/settings.ts b/packages/contracts/src/settings.ts
+index 378b8af..61d9121 100644
+--- a/packages/contracts/src/settings.ts
++++ b/packages/contracts/src/settings.ts
+@@ -1384,7 +1384,10 @@ export const ServerSettings = Schema.Struct({
+   responseStreamingMode: ResponseStreamingMode.pipe(
+     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+   ),
+-  enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
++  // Privacy build: no hourly model-manifest or provider version lookups unless turned on.
++  enableProviderUpdateChecks: Schema.Boolean.pipe(
++    Schema.withDecodingDefault(Effect.succeed(false)),
++  ),
+   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
+     Schema.withDecodingDefault(Effect.succeed(true)),
+   ),
+diff --git a/packages/shared/src/favicon.test.ts b/packages/shared/src/favicon.test.ts
+index ab6e576..1a3a5b3 100644
+--- a/packages/shared/src/favicon.test.ts
++++ b/packages/shared/src/favicon.test.ts
+@@ -3,15 +3,8 @@ import { describe, expect, it } from "@effect/vitest";
+ import { faviconUrlForOrigin, toolActivityFaviconUrl } from "./favicon.ts";
+ 
+ describe("faviconUrlForOrigin", () => {
+-  it("sends only the public hostname and requested size, never the port", () => {
+-    expect(faviconUrlForOrigin("https://github.com:8443/pingdotgg/t3code?private=query", 64)).toBe(
+-      "https://www.google.com/s2/favicons?domain=github.com&sz=64",
+-    );
+-  });
+-
+-  // regression: #5838 no favicon request for missing or non-http origins
+-  it.each([null, "invalid URL", "file:///tmp/private"])(
+-    "rejects an invalid or unsupported origin %s",
++  it.each([null, "invalid URL", "file:///tmp/private", "https://github.com/pingdotgg/t3code"])(
++    "never asks a third-party favicon service about %s",
+     (origin) => {
+       expect(faviconUrlForOrigin(origin)).toBeNull();
+     },
+@@ -19,27 +12,26 @@ describe("faviconUrlForOrigin", () => {
+ });
+ 
+ describe("toolActivityFaviconUrl", () => {
+-  it("uses the page origin instead of a third-party favicon service", () => {
++  it("loads favicons only from this machine", () => {
+     expect(toolActivityFaviconUrl({ pageUrl: "https://example.com/docs/page?q=1" }, "light")).toBe(
+-      "https://example.com/favicon.ico",
++      null,
+     );
++    expect(toolActivityFaviconUrl({ pageUrl: "https://github.com/x" }, "dark")).toBeNull();
+     expect(toolActivityFaviconUrl({ pageUrl: "http://localhost:5173/app" }, "light")).toBe(
+       "http://localhost:5173/favicon.ico",
+     );
+   });
+ 
+-  it("accepts provider-supplied image URLs but rejects extension URLs", () => {
++  it("accepts inline provider images but never remote image URLs", () => {
++    const inline = "data:image/png;base64,AAAA";
++    expect(
++      toolActivityFaviconUrl({ pageUrl: "https://example.com", faviconUrl: inline }, "light"),
++    ).toBe(inline);
+     expect(
+       toolActivityFaviconUrl(
+         { pageUrl: "https://example.com/docs", faviconUrl: "https://example.com/icon.png" },
+         "light",
+       ),
+-    ).toBe("https://example.com/icon.png");
+-    expect(
+-      toolActivityFaviconUrl(
+-        { pageUrl: "https://example.com/docs", faviconUrl: "chrome-extension://example/_favicon/" },
+-        "light",
+-      ),
+-    ).toBe("https://example.com/favicon.ico");
++    ).toBeNull();
+   });
+ });
+diff --git a/packages/shared/src/favicon.ts b/packages/shared/src/favicon.ts
+index 214214f..f141f2d 100644
+--- a/packages/shared/src/favicon.ts
++++ b/packages/shared/src/favicon.ts
+@@ -1,47 +1,27 @@
+-import { isPublicFaviconHost } from "./hostClassification.ts";
++import { isLoopbackHost } from "./preview.ts";
+ 
+-function faviconUrlForPage(rawUrl: string | null | undefined, _size = 32): string | null {
++// Privacy build: favicons never come from the network. No Google favicon service, no
++// GitHub asset CDN, and no favicon.ico fetches from sites an agent visited. Only inline
++// data: images and pages served from this machine are shown.
++
++function localFaviconUrlForPage(rawUrl: string | null | undefined): string | null {
+   if (!rawUrl || rawUrl.length > 4096) return null;
+   try {
+     const pageUrl = new URL(rawUrl);
+     if (pageUrl.protocol !== "http:" && pageUrl.protocol !== "https:") return null;
++    if (!isLoopbackHost(pageUrl.hostname)) return null;
+     return new URL("/favicon.ico", pageUrl.origin).href;
+   } catch {
+     return null;
+   }
+ }
+ 
+-const THEMED_FAVICON_BY_HOSTNAME: Readonly<
+-  Record<string, Readonly<{ light: string; dark: string }>>
+-> = {
+-  "github.com": {
+-    light: "https://github.githubassets.com/favicons/favicon.svg",
+-    dark: "https://github.githubassets.com/favicons/favicon-dark.svg",
+-  },
+-};
+-
+-function themedFaviconUrlForPage(
+-  rawUrl: string | null | undefined,
+-  appearance: "light" | "dark",
+-): string | null {
+-  if (!rawUrl || rawUrl.length > 4096) return null;
+-  try {
+-    const pageUrl = new URL(rawUrl);
+-    if (pageUrl.protocol !== "http:" && pageUrl.protocol !== "https:") return null;
+-    return THEMED_FAVICON_BY_HOSTNAME[pageUrl.hostname.toLowerCase()]?.[appearance] ?? null;
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-/** Accepts image URLs supplied by a trusted provider event. */
+-function explicitFaviconUrl(rawUrl: string | null | undefined): string | null {
+-  if (!rawUrl || rawUrl.length > 4096) return null;
++/** Accepts only inline images supplied by a trusted provider event. */
++function inlineFaviconUrl(rawUrl: string | null | undefined): string | null {
++  if (!rawUrl || rawUrl.length > 65_536) return null;
+   try {
+     const url = new URL(rawUrl);
+-    return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "data:"
+-      ? url.href
+-      : null;
++    return url.protocol === "data:" ? url.href : null;
+   } catch {
+     return null;
+   }
+@@ -54,32 +34,15 @@ export function toolActivityFaviconUrl(
+     readonly faviconUrlDark?: string | undefined;
+   },
+   appearance: "light" | "dark",
+-  size = 32,
++  _size = 32,
+ ): string | null {
+-  if (appearance === "dark") {
+-    return (
+-      explicitFaviconUrl(icon.faviconUrlDark) ??
+-      themedFaviconUrlForPage(icon.pageUrl, "dark") ??
+-      explicitFaviconUrl(icon.faviconUrl) ??
+-      faviconUrlForPage(icon.pageUrl, size)
+-    );
+-  }
+   return (
+-    explicitFaviconUrl(icon.faviconUrl) ??
+-    themedFaviconUrlForPage(icon.pageUrl, "light") ??
+-    faviconUrlForPage(icon.pageUrl, size)
++    (appearance === "dark" ? inlineFaviconUrl(icon.faviconUrlDark) : null) ??
++    inlineFaviconUrl(icon.faviconUrl) ??
++    localFaviconUrlForPage(icon.pageUrl)
+   );
+ }
+ 
+-export function faviconUrlForOrigin(rawUrl: string | null | undefined, size = 32): string | null {
+-  if (!rawUrl) return null;
+-  try {
+-    const url = new URL(rawUrl);
+-    if (!url.hostname) return null;
+-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+-    if (!isPublicFaviconHost(url.hostname)) return null;
+-    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(url.hostname)}&sz=${size}`;
+-  } catch {
+-    return null;
+-  }
++export function faviconUrlForOrigin(_rawUrl: string | null | undefined, _size = 32): string | null {
++  return null;
+ }
+-- 
+2.56.0
+
