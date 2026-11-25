@@ -74,19 +74,24 @@ jobs:
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # On the bare runner this build keeps dropping the runner offline ("lost communication"); the
+    # same build in a container (like the Arch job) is reliable. Ubuntu 24.04 keeps glibc at 2.39.
+    container: ubuntu:24.04
     env:
       PKGVER: ${{ needs.source.outputs.pkgver }}
       VERSION: ${{ needs.source.outputs.version }}
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      # The full workspace build starves the standard runner (16 GB RAM) and it drops offline.
-      - name: Free disk space and add swap
+      # Electron's runtime libraries too: packaging runs the app once to prepare its compile cache.
+      - name: Install build tools
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo fallocate -l 16G /mnt/extra-swap
-          sudo chmod 600 /mnt/extra-swap
-          sudo mkswap /mnt/extra-swap
-          sudo swapon /mnt/extra-swap
-          free -h && df -h /
+          apt-get update
+          apt-get install -y curl xz-utils git build-essential ca-certificates file \
+            libsecret-1-dev pkg-config imagemagick \
+            libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 libgbm1 \
+            libgtk-3-0t64 libasound2t64 libxss1 libxtst6 libxkbcommon0 libsecret-1-0
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -98,10 +103,6 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: build/t3code-${{ env.PKGVER }}/package.json
-      - name: Install build libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick
       - name: Build
         working-directory: build/t3code-${{ env.PKGVER }}
         run: ../../scripts/ci/build-desktop.sh linux AppImage
