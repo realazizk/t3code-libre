@@ -1,4 +1,4 @@
-From 9748d9f94b7b6bb2233820dffd3d2e93bbfb569a Mon Sep 17 00:00:00 2001
+From 51ec65b19c003522ba8dedf24bccef9f641c4acd Mon Sep 17 00:00:00 2001
 From: pkg <pkg@localhost>
 Date: Wed, 11 Nov 2026 18:04:44 +0100
 Subject: [PATCH 3/7] privacy: remove T3 accounts and T3 Connect
@@ -6,16 +6,14 @@ Subject: [PATCH 3/7] privacy: remove T3 accounts and T3 Connect
 (cherry picked from commit 86e90e51e92c6a9295dbc4c41f03412d544cf6c2)
 ---
  apps/desktop/package.json                     |    3 -
- apps/desktop/src/app/ClerkTokenStore.test.ts  |  151 --
- apps/desktop/src/app/ClerkTokenStore.ts       |  117 --
  apps/desktop/src/app/DesktopApp.test.ts       |    2 -
- apps/desktop/src/app/DesktopClerk.test.ts     |   49 +-
+ apps/desktop/src/app/DesktopClerk.test.ts     |   63 +-
  apps/desktop/src/app/DesktopClerk.ts          |   95 +-
  apps/desktop/src/electron/ElectronProtocol.ts |    2 +-
  apps/desktop/src/preload.ts                   |    3 -
  .../server/src/auth/ServerSecretStore.test.ts |   15 +
  apps/server/src/auth/ServerSecretStore.ts     |   11 +-
- apps/server/src/cli/connect.test.ts           |   66 +-
+ apps/server/src/cli/connect.test.ts           |   80 +-
  apps/server/src/cli/up.connect.test.ts        |  180 --
  apps/server/src/cloud/CliState.test.ts        |  118 --
  .../src/cloud/CloudLink.lifecycle.test.ts     | 1308 --------------
@@ -26,12 +24,12 @@ Subject: [PATCH 3/7] privacy: remove T3 accounts and T3 Connect
  apps/server/src/cloud/RelayClientLedger.ts    |    9 -
  apps/server/src/cloud/environmentKeys.test.ts |  107 --
  apps/server/src/cloud/environmentKeys.ts      |    2 +-
- apps/server/src/cloud/http.test.ts            |  306 ----
+ apps/server/src/cloud/http.test.ts            |  318 ----
  apps/server/src/cloud/publicConfig.ts         |    7 +-
  apps/server/src/policy/ManagedPolicy.ts       |    4 +-
  apps/server/src/policy/managedLimits.test.ts  |    4 +-
  apps/server/src/policy/managedLimits.ts       |    4 +-
- apps/server/src/telemetry/Identify.test.ts    |    4 +-
+ apps/server/src/telemetry/Identify.test.ts    |    7 +-
  apps/web/src/cloud/publicConfig.test.ts       |   72 +-
  apps/web/src/cloud/publicConfig.ts            |   36 +-
  .../components/settings/pairingUrls.test.ts   |    9 +-
@@ -39,9 +37,7 @@ Subject: [PATCH 3/7] privacy: remove T3 accounts and T3 Connect
  scripts/build-desktop-artifact.ts             |   32 -
  scripts/lib/public-config.test.ts             |   52 +-
  scripts/lib/public-config.ts                  |  156 +-
- 34 files changed, 126 insertions(+), 4746 deletions(-)
- delete mode 100644 apps/desktop/src/app/ClerkTokenStore.test.ts
- delete mode 100644 apps/desktop/src/app/ClerkTokenStore.ts
+ 32 files changed, 127 insertions(+), 4520 deletions(-)
  delete mode 100644 apps/server/src/cli/up.connect.test.ts
  delete mode 100644 apps/server/src/cloud/CliState.test.ts
  delete mode 100644 apps/server/src/cloud/CloudLink.lifecycle.test.ts
@@ -51,7 +47,7 @@ Subject: [PATCH 3/7] privacy: remove T3 accounts and T3 Connect
  delete mode 100644 apps/server/src/cloud/http.test.ts
 
 diff --git a/apps/desktop/package.json b/apps/desktop/package.json
-index d91a9ee..9f55636 100644
+index bd770e28..dd955e9c 100644
 --- a/apps/desktop/package.json
 +++ b/apps/desktop/package.json
 @@ -11,8 +11,6 @@
@@ -71,288 +67,8 @@ index d91a9ee..9f55636 100644
      "electron-updater": "6.8.9",
      "electron-webauthn": "catalog:",
      "ffi-rs": "1.3.2",
-diff --git a/apps/desktop/src/app/ClerkTokenStore.test.ts b/apps/desktop/src/app/ClerkTokenStore.test.ts
-deleted file mode 100644
-index 13f6bbf..0000000
---- a/apps/desktop/src/app/ClerkTokenStore.test.ts
-+++ /dev/null
-@@ -1,151 +0,0 @@
--// @effect-diagnostics nodeBuiltinImport:off -- These tests assert real POSIX modes on a temporary directory.
--import * as NodeFS from "node:fs";
--import * as NodeOS from "node:os";
--import * as NodePath from "node:path";
--import { assert, describe, it } from "@effect/vitest";
--
--import { openClerkTokenStorage, type ClerkTokenStorage } from "./ClerkTokenStore.ts";
--
--// oxlint-disable-next-line t3code/no-global-process-runtime -- Unix mode bits are the assertion; Windows reports them through ACLs.
--const describePosix = describe.skipIf(process.platform === "win32");
--
--const modeOf = (path: string): number => NodeFS.statSync(path).mode & 0o777;
--
--function writeLoose(path: string, contents: string): void {
--  NodeFS.writeFileSync(path, contents, { mode: 0o666 });
--  NodeFS.chmodSync(path, 0o666);
--}
--
--async function withStateDir(run: (stateDir: string) => Promise<void> | void): Promise<void> {
--  const stateDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-clerk-tokens-"));
--  try {
--    await run(stateDir);
--  } finally {
--    NodeFS.rmSync(stateDir, { recursive: true, force: true });
--  }
--}
--
--const idleStorage = (): ClerkTokenStorage => ({
--  getItem: async () => null,
--  setItem: async () => undefined,
--  removeItem: () => undefined,
--});
--
--describePosix("ClerkTokenStore", () => {
--  it("keeps clerk tokens at 0600 inside a 0700 directory", async () => {
--    await withStateDir(async (stateDir) => {
--      NodeFS.chmodSync(stateDir, 0o755);
--      const directory = NodePath.join(stateDir, "clerk");
--      const legacyPath = NodePath.join(stateDir, "clerk-tokens.json");
--      const tokenPath = NodePath.join(directory, "clerk-tokens.json");
--      NodeFS.mkdirSync(directory, { mode: 0o755 });
--      NodeFS.chmodSync(directory, 0o755);
--      writeLoose(legacyPath, '{"__clerk_client_jwt":"enc:existing"}\n');
--
--      const opened: string[] = [];
--      const storage = openClerkTokenStorage(stateDir, (cwd) => {
--        opened.push(cwd);
--        return {
--          getItem: async () => {
--            writeLoose(tokenPath, "from-get");
--            return "from-get";
--          },
--          setItem: (_key, value) => {
--            writeLoose(tokenPath, value);
--          },
--          removeItem: () => {
--            NodeFS.rmSync(tokenPath, { force: true });
--          },
--        };
--      });
--
--      assert.deepEqual(opened, [directory]);
--      assert.equal(modeOf(stateDir), 0o755);
--      assert.equal(modeOf(directory), 0o700);
--      assert.equal(modeOf(tokenPath), 0o600);
--      assert.equal(NodeFS.existsSync(legacyPath), false);
--      assert.equal(
--        NodeFS.readFileSync(tokenPath, "utf8"),
--        '{"__clerk_client_jwt":"enc:existing"}\n',
--      );
--
--      assert.equal(await storage.getItem("client"), "from-get");
--      assert.equal(modeOf(tokenPath), 0o600);
--      await storage.setItem("client", "from-set");
--      assert.equal(modeOf(tokenPath), 0o600);
--      assert.equal(NodeFS.readFileSync(tokenPath, "utf8"), "from-set");
--      storage.removeItem("client");
--      assert.equal(NodeFS.existsSync(tokenPath), false);
--
--      writeLoose(tokenPath, "kept");
--      writeLoose(legacyPath, "stale");
--      NodeFS.chmodSync(directory, 0o755);
--      openClerkTokenStorage(stateDir, () => idleStorage());
--      assert.equal(modeOf(directory), 0o700);
--      assert.equal(modeOf(tokenPath), 0o600);
--      assert.equal(NodeFS.existsSync(legacyPath), false);
--      assert.equal(NodeFS.readFileSync(tokenPath, "utf8"), "kept");
--    });
--  });
--
--  it("resolves a relative state directory before opening storage", async () => {
--    await withStateDir(async (stateDir) => {
--      const relativeStateDir = NodePath.relative(process.cwd(), stateDir);
--      const opened: string[] = [];
--      openClerkTokenStorage(relativeStateDir, (directory) => {
--        opened.push(directory);
--        return idleStorage();
--      });
--
--      const directory = NodePath.join(stateDir, "clerk");
--      assert.equal(NodePath.isAbsolute(relativeStateDir), false);
--      assert.deepEqual(opened, [directory]);
--      assert.equal(modeOf(directory), 0o700);
--    });
--  });
--
--  it("migrates relative state paths from Electron userData, not the working directory", async () => {
--    await withStateDir((stateDir) => {
--      const relativeStateDir = NodePath.relative(process.cwd(), stateDir);
--      const userData = NodePath.join(
--        stateDir,
--        "electron",
--        ...relativeStateDir.split(NodePath.sep).map(() => "profile"),
--      );
--      const legacyStateDir = NodePath.join(userData, relativeStateDir);
--      const legacyPath = NodePath.join(legacyStateDir, "clerk-tokens.json");
--      NodeFS.mkdirSync(legacyStateDir, { recursive: true });
--      writeLoose(legacyPath, "existing-session");
--      const unrelatedPath = NodePath.join(stateDir, "clerk-tokens.json");
--      writeLoose(unrelatedPath, "not-the-electron-session");
--
--      openClerkTokenStorage(relativeStateDir, idleStorage, userData);
--
--      const tokenPath = NodePath.join(stateDir, "clerk", "clerk-tokens.json");
--      assert.equal(NodeFS.readFileSync(tokenPath, "utf8"), "existing-session");
--      assert.equal(modeOf(tokenPath), 0o600);
--      assert.equal(NodeFS.existsSync(legacyPath), false);
--      assert.equal(NodeFS.readFileSync(unrelatedPath, "utf8"), "not-the-electron-session");
--    });
--  });
--
--  it("does not follow a symlinked clerk directory or token file", async () => {
--    await withStateDir(async (stateDir) => {
--      const outsideDirectory = NodePath.join(stateDir, "outside-dir");
--      NodeFS.mkdirSync(outsideDirectory, { mode: 0o755 });
--      NodeFS.chmodSync(outsideDirectory, 0o755);
--      NodeFS.symlinkSync(outsideDirectory, NodePath.join(stateDir, "clerk"));
--
--      assert.throws(() => openClerkTokenStorage(stateDir, idleStorage), /must be a real directory/);
--      assert.equal(modeOf(outsideDirectory), 0o755);
--      NodeFS.unlinkSync(NodePath.join(stateDir, "clerk"));
--
--      const outsideFile = NodePath.join(stateDir, "outside.json");
--      NodeFS.writeFileSync(outsideFile, "secret", { mode: 0o644 });
--      NodeFS.chmodSync(outsideFile, 0o644);
--      NodeFS.symlinkSync(outsideFile, NodePath.join(stateDir, "clerk-tokens.json"));
--      assert.throws(() => openClerkTokenStorage(stateDir, idleStorage), /must be a regular file/);
--      assert.equal(modeOf(outsideFile), 0o644);
--    });
--  });
--});
-diff --git a/apps/desktop/src/app/ClerkTokenStore.ts b/apps/desktop/src/app/ClerkTokenStore.ts
-deleted file mode 100644
-index 005736c..0000000
---- a/apps/desktop/src/app/ClerkTokenStore.ts
-+++ /dev/null
-@@ -1,117 +0,0 @@
--// @effect-diagnostics nodeBuiltinImport:off -- The Clerk bridge must lock the token file down before startup can yield to Electron's ready event.
--import * as NodeFS from "node:fs";
--import * as NodePath from "node:path";
--
--// electron-store chmods every write to 0666; the private directory protects tokens during writes.
--const CLERK_TOKEN_DIRECTORY_MODE = 0o700;
--const CLERK_TOKEN_FILE_MODE = 0o600;
--const CLERK_TOKEN_DIRECTORY_NAME = "clerk";
--const CLERK_TOKEN_FILE_NAME = "clerk-tokens.json";
--
--type Awaitable<T> = T | Promise<T>;
--
--export interface ClerkTokenStorage {
--  readonly getItem: (key: string) => Awaitable<string | null>;
--  readonly setItem: (key: string, value: string) => Awaitable<void>;
--  readonly removeItem: (key: string) => Awaitable<void>;
--}
--
--function isErrno(error: unknown, code: string): boolean {
--  return typeof error === "object" && error !== null && "code" in error && error.code === code;
--}
--
--function lstatIfExists(path: string): NodeFS.Stats | undefined {
--  try {
--    return NodeFS.lstatSync(path);
--  } catch (error) {
--    if (isErrno(error, "ENOENT")) return undefined;
--    throw error;
--  }
--}
--
--function assertRegularFile(path: string, stat: NodeFS.Stats): void {
--  if (stat.isSymbolicLink() || !stat.isFile()) {
--    throw new Error(`Clerk token file "${path}" must be a regular file.`);
--  }
--}
--
--function restrictClerkTokenFile(path: string): void {
--  const stat = lstatIfExists(path);
--  if (stat === undefined) return;
--  assertRegularFile(path, stat);
--  if ((stat.mode & 0o777) === CLERK_TOKEN_FILE_MODE) return;
--  NodeFS.chmodSync(path, CLERK_TOKEN_FILE_MODE);
--}
--
--function migrateLegacyClerkTokenFile(stateDir: string, directory: string): void {
--  const legacyPath = NodePath.join(stateDir, CLERK_TOKEN_FILE_NAME);
--  const tokenPath = NodePath.join(directory, CLERK_TOKEN_FILE_NAME);
--  const legacy = lstatIfExists(legacyPath);
--  if (legacy !== undefined) {
--    assertRegularFile(legacyPath, legacy);
--    NodeFS.chmodSync(legacyPath, CLERK_TOKEN_FILE_MODE);
--  }
--
--  const destination = lstatIfExists(tokenPath);
--  if (destination === undefined) {
--    if (legacy === undefined) return;
--    try {
--      NodeFS.copyFileSync(legacyPath, tokenPath, NodeFS.constants.COPYFILE_EXCL);
--      NodeFS.chmodSync(tokenPath, CLERK_TOKEN_FILE_MODE);
--      NodeFS.unlinkSync(legacyPath);
--    } catch (error) {
--      if (!isErrno(error, "ENOENT")) throw error;
--    }
--    return;
--  }
--
--  assertRegularFile(tokenPath, destination);
--  NodeFS.chmodSync(tokenPath, CLERK_TOKEN_FILE_MODE);
--  if (legacy === undefined) return;
--  try {
--    NodeFS.unlinkSync(legacyPath);
--  } catch (error) {
--    if (!isErrno(error, "ENOENT")) throw error;
--  }
--}
--
--function restrictAfter<T>(run: () => Awaitable<T>, tighten: () => void): Awaitable<T> {
--  let result: Awaitable<T>;
--  try {
--    result = run();
--  } catch (error) {
--    tighten();
--    throw error;
--  }
--  if (result instanceof Promise) return result.finally(tighten);
--  tighten();
--  return result;
--}
--
--/** Opens Clerk token storage in a private directory and keeps the file at `0600`. */
--export function openClerkTokenStorage(
--  stateDir: string,
--  createStorage: (directory: string) => ClerkTokenStorage,
--  userDataPath = ".",
--): ClerkTokenStorage {
--  const absoluteStateDir = NodePath.resolve(stateDir);
--  const directory = NodePath.join(absoluteStateDir, CLERK_TOKEN_DIRECTORY_NAME);
--  NodeFS.mkdirSync(directory, { recursive: true, mode: CLERK_TOKEN_DIRECTORY_MODE });
--  const stat = NodeFS.lstatSync(directory);
--  if (stat.isSymbolicLink() || !stat.isDirectory()) {
--    throw new Error(`Clerk token directory "${directory}" must be a real directory.`);
--  }
--  NodeFS.chmodSync(directory, CLERK_TOKEN_DIRECTORY_MODE);
--  // electron-store rebases relative paths under Electron userData, not the working directory.
--  migrateLegacyClerkTokenFile(NodePath.resolve(userDataPath, stateDir), directory);
--  const tokenPath = NodePath.join(directory, CLERK_TOKEN_FILE_NAME);
--  restrictClerkTokenFile(tokenPath);
--
--  const storage = createStorage(directory);
--  const tighten = () => restrictClerkTokenFile(tokenPath);
--  return {
--    getItem: (key) => restrictAfter(() => storage.getItem(key), tighten),
--    setItem: (key, value) => restrictAfter(() => storage.setItem(key, value), tighten),
--    removeItem: (key) => restrictAfter(() => storage.removeItem(key), tighten),
--  };
--}
 diff --git a/apps/desktop/src/app/DesktopApp.test.ts b/apps/desktop/src/app/DesktopApp.test.ts
-index cc5fca3..97d39de 100644
+index 360ed62c..f32bc692 100644
 --- a/apps/desktop/src/app/DesktopApp.test.ts
 +++ b/apps/desktop/src/app/DesktopApp.test.ts
 @@ -17,8 +17,6 @@ import * as Stream from "effect/Stream";
@@ -365,7 +81,7 @@ index cc5fca3..97d39de 100644
    installDesktopIpcHandlers: () => Effect.void,
  }));
 diff --git a/apps/desktop/src/app/DesktopClerk.test.ts b/apps/desktop/src/app/DesktopClerk.test.ts
-index de687d4..3bf945e 100644
+index c17cb008..01bbc82e 100644
 --- a/apps/desktop/src/app/DesktopClerk.test.ts
 +++ b/apps/desktop/src/app/DesktopClerk.test.ts
 @@ -17,24 +17,8 @@ afterAll(() => {
@@ -395,7 +111,7 @@ index de687d4..3bf945e 100644
  }));
  import * as Exit from "effect/Exit";
  import * as FileSystem from "effect/FileSystem";
-@@ -112,9 +96,7 @@ const layerDesktopClerk = (
+@@ -113,9 +97,7 @@ const layerDesktopClerk = (
  
  describe("DesktopClerk", () => {
    beforeEach(() => {
@@ -405,7 +121,7 @@ index de687d4..3bf945e 100644
    });
  
    it.each([
-@@ -143,14 +125,9 @@ describe("DesktopClerk", () => {
+@@ -144,14 +126,9 @@ describe("DesktopClerk", () => {
        userData: "/tmp/app-data/t3code-dev",
      },
    ])(
@@ -421,7 +137,7 @@ index de687d4..3bf945e 100644
        // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- The assertion IS that the layer builds synchronously; it.effect would mask a regression to async.
        Effect.runSync(
          Effect.scoped(
-@@ -165,20 +142,13 @@ describe("DesktopClerk", () => {
+@@ -166,35 +143,14 @@ describe("DesktopClerk", () => {
          "requestSingleInstanceLock",
          "on:second-instance",
          "on:open-url",
@@ -430,9 +146,24 @@ index de687d4..3bf945e 100644
 -      assert.deepEqual(storageMock.mock.calls, [
 -        [{ path: NodePath.join(NodePath.resolve(clerkStateDir), "clerk") }],
 -      ]);
--      assert.notStrictEqual(createClerkBridgeMock.mock.calls[0]?.[0]?.storage, storageAdapter);
+-      assert.strictEqual(createClerkBridgeMock.mock.calls[0]?.[0]?.storage, storageAdapter);
      },
    );
+ 
+-  it.effect("keeps Clerk tokens under a relative state directory instead of userData", () => {
+-    storageMock.mockReturnValue(storageAdapter);
+-    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+-
+-    return Effect.sync(() => {
+-      assert.deepEqual(storageMock.mock.calls, [
+-        [{ path: NodePath.resolve("relative-state", "clerk") }],
+-      ]);
+-    }).pipe(
+-      Effect.provide(
+-        layerDesktopClerk(true, [], "darwin", undefined, undefined, undefined, "relative-state"),
+-      ),
+-    );
+-  });
  
    it.effect.each(["before configure", "after configure"] as const)(
      "reveals the running window when a second instance launches %s",
@@ -442,7 +173,7 @@ index de687d4..3bf945e 100644
        const quit = vi.fn();
        const listeners = new Map<string, (...args: unknown[]) => void>();
        const revealed = Promise.withResolvers<unknown>();
-@@ -214,8 +184,6 @@ describe("DesktopClerk", () => {
+@@ -230,8 +186,6 @@ describe("DesktopClerk", () => {
    );
  
    it.effect("delivers each queued startup link once, before later links", () => {
@@ -451,7 +182,7 @@ index de687d4..3bf945e 100644
      const listeners = new Map<string, (...args: unknown[]) => void>();
      const received: string[] = [];
      const first = "t3code://new?prompt=first";
-@@ -265,11 +233,10 @@ describe("DesktopClerk", () => {
+@@ -281,11 +235,10 @@ describe("DesktopClerk", () => {
    });
  
    it.effect.each(["darwin", "win32", "linux"] as const)(
@@ -464,7 +195,7 @@ index de687d4..3bf945e 100644
          const events: string[] = [];
          const runtime = layerDesktopClerk(false, events, platform).pipe(
            Layer.flatMap(() =>
-@@ -288,8 +255,6 @@ describe("DesktopClerk", () => {
+@@ -304,8 +257,6 @@ describe("DesktopClerk", () => {
            "requestSingleInstanceLock",
            "quit",
          ]);
@@ -473,7 +204,7 @@ index de687d4..3bf945e 100644
        }),
    );
  });
-@@ -297,8 +262,6 @@ describe("DesktopClerk", () => {
+@@ -313,8 +264,6 @@ describe("DesktopClerk", () => {
  it.effect(
    "provider auth deep links navigate and reveal the running desktop without handling Clerk URLs",
    () => {
@@ -482,7 +213,7 @@ index de687d4..3bf945e 100644
      const listeners = new Map<string, (...args: unknown[]) => void>();
      const revealed = Promise.withResolvers<void>();
      const loadURL = vi.fn(async (_url: string) => undefined);
-@@ -345,8 +308,6 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
+@@ -361,8 +310,6 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
    "receives hosted web sign-in through the desktop %s handler",
    (entry) =>
      Effect.gen(function* () {
@@ -491,7 +222,7 @@ index de687d4..3bf945e 100644
        const port = yield* Effect.promise(async () => {
          const server = NodeHttp.createServer();
          await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-@@ -429,8 +390,6 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
+@@ -445,8 +392,6 @@ it.effect.each(["startup", "open-url", "early-second-instance"] as const)(
  
  it.effect("hands web and app links to the renderer and leaves other links alone", () =>
    Effect.gen(function* () {
@@ -501,10 +232,10 @@ index de687d4..3bf945e 100644
      const electronApp = {
        whenReady: Effect.void,
 diff --git a/apps/desktop/src/app/DesktopClerk.ts b/apps/desktop/src/app/DesktopClerk.ts
-index 207aa17..e0f1dd2 100644
+index e84dea47..e0f1dd2d 100644
 --- a/apps/desktop/src/app/DesktopClerk.ts
 +++ b/apps/desktop/src/app/DesktopClerk.ts
-@@ -1,11 +1,8 @@
+@@ -1,12 +1,8 @@
 -import { createClerkBridge } from "@clerk/electron";
  import * as NodeURL from "node:url";
 -import { storage } from "@clerk/electron/storage";
@@ -512,11 +243,12 @@ index 207aa17..e0f1dd2 100644
  import * as Effect from "effect/Effect";
  import * as Layer from "effect/Layer";
  import * as Option from "effect/Option";
+-import * as Path from "effect/Path";
 -import * as Schema from "effect/Schema";
  import * as Scope from "effect/Scope";
  
  import { codexAuthDeliveryUrl, readCodexAuthHandoff } from "@t3tools/shared/codexAuthHandoff";
-@@ -15,43 +12,13 @@ import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
+@@ -16,7 +12,6 @@ import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
  import { promptLinkAppPath } from "@t3tools/shared/promptLinks";
  import { readPairingAppLink } from "@t3tools/shared/remote";
  import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -524,9 +256,8 @@ index 207aa17..e0f1dd2 100644
  import * as ElectronApp from "../electron/ElectronApp.ts";
  import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
  import * as ElectronWindow from "../electron/ElectronWindow.ts";
- import * as DesktopUserData from "./DesktopUserData.ts";
+@@ -24,34 +19,6 @@ import * as DesktopUserData from "./DesktopUserData.ts";
  import * as DesktopEnvironment from "./DesktopEnvironment.ts";
--import { openClerkTokenStorage } from "./ClerkTokenStore.ts";
  import * as DesktopWebLinks from "./DesktopWebLinks.ts";
  
 -declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
@@ -560,7 +291,7 @@ index 207aa17..e0f1dd2 100644
  export class DesktopClerk extends Context.Service<
    DesktopClerk,
    {
-@@ -66,40 +33,8 @@ export class DesktopClerk extends Context.Service<
+@@ -66,49 +33,19 @@ export class DesktopClerk extends Context.Service<
    }
  >()("@t3tools/desktop/app/DesktopClerk") {}
  
@@ -583,13 +314,9 @@ index 207aa17..e0f1dd2 100644
 -    : __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__,
 -);
 -
--function createDesktopClerkBridge(stateDir: string, isDevelopment: boolean, userDataPath: string) {
+-function createDesktopClerkBridge(tokenDirectory: string, isDevelopment: boolean) {
 -  return createClerkBridge({
--    storage: openClerkTokenStorage(
--      stateDir,
--      (directory) => storage({ path: directory }),
--      userDataPath,
--    ),
+-    storage: storage({ path: tokenDirectory }),
 -    manageSingleInstanceLock: false,
 -    passkeys: true,
 -    renderer: {
@@ -603,9 +330,10 @@ index 207aa17..e0f1dd2 100644
  
  /** @public */
  export const make = Effect.gen(function* () {
-@@ -107,11 +42,10 @@ export const make = Effect.gen(function* () {
+   const environment = yield* DesktopEnvironment.DesktopEnvironment;
    const electronApp = yield* ElectronApp.ElectronApp;
    const shell = yield* ElectronShell.ElectronShell;
+-  const path = yield* Path.Path;
  
 -  // Must not yield: the bridge registers a scheme Electron rejects once ready.
    const userDataPath = yield* DesktopUserData.resolveUserDataPath(environment);
@@ -616,14 +344,17 @@ index 207aa17..e0f1dd2 100644
    if (!(yield* electronApp.requestSingleInstanceLock)) {
      yield* electronApp.quit;
      return yield* Effect.interrupt;
-@@ -139,29 +73,6 @@ export const make = Effect.gen(function* () {
+@@ -136,32 +73,6 @@ export const make = Effect.gen(function* () {
      if (handleOpenUrl(url)) event.preventDefault();
    });
  
 -  yield* Effect.acquireRelease(
 -    Effect.try({
 -      try: () =>
--        createDesktopClerkBridge(environment.stateDir, environment.isDevelopment, userDataPath),
+-        createDesktopClerkBridge(
+-          path.resolve(environment.stateDir, "clerk"),
+-          environment.isDevelopment,
+-        ),
 -      catch: (cause) =>
 -        new DesktopClerkBridgeInitializationError({
 -          stateDir: environment.stateDir,
@@ -647,7 +378,7 @@ index 207aa17..e0f1dd2 100644
      configure: Effect.gen(function* () {
        const electronApp = yield* ElectronApp.ElectronApp;
 diff --git a/apps/desktop/src/electron/ElectronProtocol.ts b/apps/desktop/src/electron/ElectronProtocol.ts
-index 7563898..eb6c68c 100644
+index 43208638..1098bda5 100644
 --- a/apps/desktop/src/electron/ElectronProtocol.ts
 +++ b/apps/desktop/src/electron/ElectronProtocol.ts
 @@ -12,7 +12,7 @@ import * as Scope from "effect/Scope";
@@ -660,7 +391,7 @@ index 7563898..eb6c68c 100644
  const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
  
 diff --git a/apps/desktop/src/preload.ts b/apps/desktop/src/preload.ts
-index 280c5ad..82666af 100644
+index ab472baa..dc5d9f67 100644
 --- a/apps/desktop/src/preload.ts
 +++ b/apps/desktop/src/preload.ts
 @@ -8,7 +8,6 @@ import type {
@@ -681,7 +412,7 @@ index 280c5ad..82666af 100644
  try {
    const legacyItems: unknown = ipcRenderer.sendSync(IpcChannels.TAKE_LEGACY_LOCAL_STORAGE_CHANNEL);
 diff --git a/apps/server/src/auth/ServerSecretStore.test.ts b/apps/server/src/auth/ServerSecretStore.test.ts
-index d35141b..dedde29 100644
+index d35141b2..dedde295 100644
 --- a/apps/server/src/auth/ServerSecretStore.test.ts
 +++ b/apps/server/src/auth/ServerSecretStore.test.ts
 @@ -226,6 +226,21 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerSecretStor
@@ -707,7 +438,7 @@ index d35141b..dedde29 100644
      Effect.gen(function* () {
        const secretStore = yield* ServerSecretStore.ServerSecretStore;
 diff --git a/apps/server/src/auth/ServerSecretStore.ts b/apps/server/src/auth/ServerSecretStore.ts
-index f71afd8..83817e7 100644
+index f71afd8c..83817e73 100644
 --- a/apps/server/src/auth/ServerSecretStore.ts
 +++ b/apps/server/src/auth/ServerSecretStore.ts
 @@ -190,7 +190,7 @@ export const make = Effect.gen(function* () {
@@ -736,10 +467,10 @@ index f71afd8..83817e7 100644
      resolveSecretPath(name).pipe(
        Effect.flatMap((secretPath) => setAt(name, secretPath, value)),
 diff --git a/apps/server/src/cli/connect.test.ts b/apps/server/src/cli/connect.test.ts
-index 4fbec45..2621c62 100644
+index 630fe7cb..62cabd6d 100644
 --- a/apps/server/src/cli/connect.test.ts
 +++ b/apps/server/src/cli/connect.test.ts
-@@ -64,33 +64,33 @@ it.effect("does not install the relay client when the user declines the managed
+@@ -69,33 +69,33 @@ it.effect("does not install the relay client when the user declines the managed
  it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))(
    "t3 connect next steps",
    (it) => {
@@ -796,7 +527,7 @@ index 4fbec45..2621c62 100644
      );
    },
  );
-@@ -211,26 +211,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
+@@ -233,40 +233,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
        }),
      );
  
@@ -805,6 +536,20 @@ index 4fbec45..2621c62 100644
 -        const { requests } = yield* runConnect(process.pid, { command: "status" });
 -
 -        assert.deepEqual(requests, ["POST /api/connect/reachability"]);
+-      }),
+-    );
+-
+-    it.effect("status checks reachability for an environment linked from the app", () =>
+-      Effect.gen(function* () {
+-        const { requests, printed } = yield* runConnect(process.pid, {
+-          command: "status",
+-          linkedByApp: true,
+-        });
+-
+-        assert.deepEqual(requests, ["POST /api/connect/reachability"]);
+-        assert.notInclude(printed, "Exposure: disabled");
+-        assert.notInclude(printed, "Authorization: missing");
+-        assert.notInclude(printed, "Next:");
 -      }),
 -    );
 -
@@ -825,7 +570,7 @@ index 4fbec45..2621c62 100644
          const { requests, printed, warnings } = yield* runConnect(process.pid);
 diff --git a/apps/server/src/cli/up.connect.test.ts b/apps/server/src/cli/up.connect.test.ts
 deleted file mode 100644
-index d7cfe68..0000000
+index d7cfe68a..00000000
 --- a/apps/server/src/cli/up.connect.test.ts
 +++ /dev/null
 @@ -1,180 +0,0 @@
@@ -1011,7 +756,7 @@ index d7cfe68..0000000
 -);
 diff --git a/apps/server/src/cloud/CliState.test.ts b/apps/server/src/cloud/CliState.test.ts
 deleted file mode 100644
-index ba1bbcb..0000000
+index ba1bbcb9..00000000
 --- a/apps/server/src/cloud/CliState.test.ts
 +++ /dev/null
 @@ -1,118 +0,0 @@
@@ -1135,7 +880,7 @@ index ba1bbcb..0000000
 -});
 diff --git a/apps/server/src/cloud/CloudLink.lifecycle.test.ts b/apps/server/src/cloud/CloudLink.lifecycle.test.ts
 deleted file mode 100644
-index a71a8f0..0000000
+index a71a8f00..00000000
 --- a/apps/server/src/cloud/CloudLink.lifecycle.test.ts
 +++ /dev/null
 @@ -1,1308 +0,0 @@
@@ -2449,7 +2194,7 @@ index a71a8f0..0000000
 -});
 diff --git a/apps/server/src/cloud/CloudLink.test.ts b/apps/server/src/cloud/CloudLink.test.ts
 deleted file mode 100644
-index 9880ffc..0000000
+index 9880ffca..00000000
 --- a/apps/server/src/cloud/CloudLink.test.ts
 +++ /dev/null
 @@ -1,395 +0,0 @@
@@ -2849,7 +2594,7 @@ index 9880ffc..0000000
 -  }),
 -);
 diff --git a/apps/server/src/cloud/CloudLink.ts b/apps/server/src/cloud/CloudLink.ts
-index 6c9c702..63ad6c1 100644
+index 6c9c7024..63ad6c1b 100644
 --- a/apps/server/src/cloud/CloudLink.ts
 +++ b/apps/server/src/cloud/CloudLink.ts
 @@ -312,7 +312,7 @@ function stringToBytes(value: string): Uint8Array {
@@ -2863,7 +2608,7 @@ index 6c9c702..63ad6c1 100644
    readonly value: Uint8Array;
 diff --git a/apps/server/src/cloud/ManagedEndpointRuntime.test.ts b/apps/server/src/cloud/ManagedEndpointRuntime.test.ts
 deleted file mode 100644
-index c7caf65..0000000
+index c7caf652..00000000
 --- a/apps/server/src/cloud/ManagedEndpointRuntime.test.ts
 +++ /dev/null
 @@ -1,1532 +0,0 @@
@@ -4400,7 +4145,7 @@ index c7caf65..0000000
 -  );
 -});
 diff --git a/apps/server/src/cloud/ManagedEndpointRuntime.ts b/apps/server/src/cloud/ManagedEndpointRuntime.ts
-index ffc5334..78dbe4f 100644
+index ffc53348..78dbe4fc 100644
 --- a/apps/server/src/cloud/ManagedEndpointRuntime.ts
 +++ b/apps/server/src/cloud/ManagedEndpointRuntime.ts
 @@ -162,7 +162,7 @@ function needsPinnedRelayClient(executable: RelayClient.RelayClientStatus): bool
@@ -4422,7 +4167,7 @@ index ffc5334..78dbe4f 100644
      /\bRegister tunnel error from server side\b/iu.test(line) &&
      /error="(?:Unauthorized:[^"]*|Failed to get tunnel|Tunnel not found|Record for tunnel not found|Invalid tunnel secret)"/iu.test(
 diff --git a/apps/server/src/cloud/RelayClientLedger.ts b/apps/server/src/cloud/RelayClientLedger.ts
-index dfd95e2..873d9a2 100644
+index dfd95e2d..873d9a2e 100644
 --- a/apps/server/src/cloud/RelayClientLedger.ts
 +++ b/apps/server/src/cloud/RelayClientLedger.ts
 @@ -247,12 +247,3 @@ export const layer = (input: { readonly stateDir: string }) =>
@@ -4440,7 +4185,7 @@ index dfd95e2..873d9a2 100644
 -);
 diff --git a/apps/server/src/cloud/environmentKeys.test.ts b/apps/server/src/cloud/environmentKeys.test.ts
 deleted file mode 100644
-index a10ec9a..0000000
+index a10ec9ae..00000000
 --- a/apps/server/src/cloud/environmentKeys.test.ts
 +++ /dev/null
 @@ -1,107 +0,0 @@
@@ -4552,7 +4297,7 @@ index a10ec9a..0000000
 -  },
 -);
 diff --git a/apps/server/src/cloud/environmentKeys.ts b/apps/server/src/cloud/environmentKeys.ts
-index 9b70539..969f36b 100644
+index 9b705390..969f36bc 100644
 --- a/apps/server/src/cloud/environmentKeys.ts
 +++ b/apps/server/src/cloud/environmentKeys.ts
 @@ -80,7 +80,7 @@ const persistEnvironmentKeyPair = Effect.fn("persistEnvironmentKeyPair")(functio
@@ -4566,10 +4311,10 @@ index 9b70539..969f36b 100644
    const existing = yield* readEnvironmentKeyPair(secrets);
 diff --git a/apps/server/src/cloud/http.test.ts b/apps/server/src/cloud/http.test.ts
 deleted file mode 100644
-index 5115a27..0000000
+index 852be24a..00000000
 --- a/apps/server/src/cloud/http.test.ts
 +++ /dev/null
-@@ -1,306 +0,0 @@
+@@ -1,318 +0,0 @@
 -import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 -import * as NodeServices from "@effect/platform-node/NodeServices";
 -import { describe, expect, it } from "@effect/vitest";
@@ -4603,6 +4348,7 @@ index 5115a27..0000000
 -import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 -import * as ServerConfig from "../config.ts";
 -import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+-import * as ServerHttp from "../http.ts";
 -import * as SqlitePersistence from "../persistence/Sqlite.ts";
 -import * as AgentAwarenessRelay from "../relay/AgentAwarenessRelay.ts";
 -import * as CliTokenManager from "./CliTokenManager.ts";
@@ -4650,6 +4396,7 @@ index 5115a27..0000000
 -const layerLinkProofRoutes = HttpApiBuilder.layer(LinkProofTestApi).pipe(
 -  Layer.provide([AuthHttp.layer, ConnectHttp.layer]),
 -  Layer.provide(AuthHttp.layerAuthenticatedAuth),
+-  Layer.provide(ServerHttp.layerApiBodyLimit),
 -  Layer.provide(CloudLink.layer),
 -  Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
 -  Layer.provide(EnvironmentKeys.layer),
@@ -4875,9 +4622,19 @@ index 5115a27..0000000
 -      expect(response.status).toBe(401);
 -    }),
 -  );
+-
+-  it.effect("answers 413 to a relay proof body over the API limit", () =>
+-    Effect.gen(function* () {
+-      const { post } = yield* linkProofClient;
+-      const payload = { proof: "x".repeat(ServerHttp.API_MAX_BODY_BYTES) };
+-      for (const path of ["/api/t3-connect/health", "/api/t3-connect/mint-credential"]) {
+-        expect((yield* post(path, payload)).status, path).toBe(413);
+-      }
+-    }),
+-  );
 -});
 diff --git a/apps/server/src/cloud/publicConfig.ts b/apps/server/src/cloud/publicConfig.ts
-index 85ffbbb..afdc7df 100644
+index 85ffbbb0..afdc7dfb 100644
 --- a/apps/server/src/cloud/publicConfig.ts
 +++ b/apps/server/src/cloud/publicConfig.ts
 @@ -218,8 +218,5 @@ export function makeCloudCliOAuthConfig({
@@ -4892,10 +4649,10 @@ index 85ffbbb..afdc7df 100644
 +// Privacy build: T3 accounts and T3 Connect are removed; no env var can turn them back on.
 +export const hasCloudPublicConfig = false;
 diff --git a/apps/server/src/policy/ManagedPolicy.ts b/apps/server/src/policy/ManagedPolicy.ts
-index 36665b6..ef96907 100644
+index 51c5efbc..54b8b249 100644
 --- a/apps/server/src/policy/ManagedPolicy.ts
 +++ b/apps/server/src/policy/ManagedPolicy.ts
-@@ -139,7 +139,9 @@ function summarizeLimits(
+@@ -140,7 +140,9 @@ function summarizeLimits(
      providers,
      updates,
    } = document.limits ?? {};
@@ -4907,7 +4664,7 @@ index 36665b6..ef96907 100644
      ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
      ...(clients === undefined ? {} : { clients }),
 diff --git a/apps/server/src/policy/managedLimits.test.ts b/apps/server/src/policy/managedLimits.test.ts
-index a09f119..e7a6ca6 100644
+index a09f1190..e7a6ca6c 100644
 --- a/apps/server/src/policy/managedLimits.test.ts
 +++ b/apps/server/src/policy/managedLimits.test.ts
 @@ -125,7 +125,9 @@ it.effect("tells clients Connect is off when the policy leaves out remote client
@@ -4922,7 +4679,7 @@ index a09f119..e7a6ca6 100644
    }),
  );
 diff --git a/apps/server/src/policy/managedLimits.ts b/apps/server/src/policy/managedLimits.ts
-index 88df7d6..16ad2c6 100644
+index 88df7d63..16ad2c6a 100644
 --- a/apps/server/src/policy/managedLimits.ts
 +++ b/apps/server/src/policy/managedLimits.ts
 @@ -73,8 +73,8 @@ export const allowsRemoteClients = (policy: PolicyDocument) =>
@@ -4937,29 +4694,31 @@ index 88df7d6..16ad2c6 100644
  const refuse = (policy: PolicyDocument, action: string, detail?: string) =>
    new ManagedPolicyRefusedError({
 diff --git a/apps/server/src/telemetry/Identify.test.ts b/apps/server/src/telemetry/Identify.test.ts
-index b888e07..8c756b8 100644
+index c25adfe6..43e973e5 100644
 --- a/apps/server/src/telemetry/Identify.test.ts
 +++ b/apps/server/src/telemetry/Identify.test.ts
-@@ -161,7 +161,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
+@@ -143,16 +143,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
      }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-read-", logs)));
    });
  
--  it.effect("reads the Connect account and each provider account as owners", () =>
-+  // Privacy build: the secret store hides T3 Connect link secrets, so only providers own the server.
-+  it.effect("reads each provider account as an owner, never a stored Connect account", () =>
+-  it.effect("reads only the linked Connect account as an owner", () =>
++  // Privacy build: the secret store hides T3 Connect link secrets, so the server has no owner.
++  it.effect("never reads a stored Connect account as an owner", () =>
      Effect.gen(function* () {
-       const config = yield* ServerConfig.ServerConfig;
        const secrets = yield* ServerSecretStore.ServerSecretStore;
-@@ -193,7 +194,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("telemetry identi
-       const owners = yield* Identify.getServerOwnersForHome(homeDirectory);
+       assert.deepEqual(yield* Identify.getServerOwners, []);
  
-       assert.deepEqual(owners, [
+       yield* secrets.set(CLOUD_LINKED_USER_ID, new TextEncoder().encode("user_connect"));
+ 
+-      assert.deepEqual(yield* Identify.getServerOwners, [
 -        { source: "connect", ownerId: yield* sha256("user_connect") },
-         { source: "openai", ownerId: yield* sha256("user-openai-person") },
-         { source: "claude", ownerId: yield* sha256("claude-person") },
-       ]);
+-      ]);
++      assert.deepEqual(yield* Identify.getServerOwners, []);
+     }).pipe(Effect.provide(layerIdentity("t3-telemetry-identify-owners-"))),
+   );
+ });
 diff --git a/apps/web/src/cloud/publicConfig.test.ts b/apps/web/src/cloud/publicConfig.test.ts
-index 182367a..95a83bf 100644
+index 182367a4..95a83bfd 100644
 --- a/apps/web/src/cloud/publicConfig.test.ts
 +++ b/apps/web/src/cloud/publicConfig.test.ts
 @@ -1,4 +1,4 @@
@@ -5048,7 +4807,7 @@ index 182367a..95a83bf 100644
 -  });
  });
 diff --git a/apps/web/src/cloud/publicConfig.ts b/apps/web/src/cloud/publicConfig.ts
-index ec9cf15..efb5b3d 100644
+index 60f5d1f8..a0e5bd01 100644
 --- a/apps/web/src/cloud/publicConfig.ts
 +++ b/apps/web/src/cloud/publicConfig.ts
 @@ -1,7 +1,4 @@
@@ -5060,7 +4819,7 @@ index ec9cf15..efb5b3d 100644
  import { normalizeSecureRelayUrl } from "@t3tools/shared/relayUrl";
  import * as Schema from "effect/Schema";
  
-@@ -85,36 +82,9 @@ export function resolveRelayTracingConfig() {
+@@ -94,36 +91,9 @@ export function resolveRelayTracingConfig() {
      : null;
  }
  
@@ -5100,7 +4859,7 @@ index ec9cf15..efb5b3d 100644
  
  export function resolveRelayClerkTokenOptions() {
 diff --git a/apps/web/src/components/settings/pairingUrls.test.ts b/apps/web/src/components/settings/pairingUrls.test.ts
-index c5c45bc..7b10b73 100644
+index c5c45bcf..7b10b730 100644
 --- a/apps/web/src/components/settings/pairingUrls.test.ts
 +++ b/apps/web/src/components/settings/pairingUrls.test.ts
 @@ -14,11 +14,14 @@ describe("settings pairing URL helpers", () => {
@@ -5122,7 +4881,7 @@ index c5c45bc..7b10b73 100644
    });
  });
 diff --git a/apps/web/src/components/settings/pairingUrls.ts b/apps/web/src/components/settings/pairingUrls.ts
-index 97e5535..6b9323f 100644
+index 97e55355..6b9323f2 100644
 --- a/apps/web/src/components/settings/pairingUrls.ts
 +++ b/apps/web/src/components/settings/pairingUrls.ts
 @@ -1,4 +1,3 @@
@@ -5150,10 +4909,10 @@ index 97e5535..6b9323f 100644
 +  return null;
  }
 diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
-index b1b389a..b271ecb 100644
+index 61daf9cb..932a3208 100644
 --- a/scripts/build-desktop-artifact.ts
 +++ b/scripts/build-desktop-artifact.ts
-@@ -1546,37 +1546,6 @@ const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(funct
+@@ -1553,37 +1553,6 @@ const stageKeyringNativeBinaries = Effect.fn("stageKeyringNativeBinaries")(funct
    }
  });
  
@@ -5191,7 +4950,7 @@ index b1b389a..b271ecb 100644
  export function createStageWorkspaceConfig(input: {
    readonly platform: typeof BuildPlatform.Type;
    readonly arch: typeof BuildArch.Type;
-@@ -3973,7 +3942,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
+@@ -4017,7 +3986,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
      }),
      { label: "vp install --prod", verbose: options.verbose },
    );
@@ -5200,7 +4959,7 @@ index b1b389a..b271ecb 100644
  
    if (options.platform === "win" && windowsServerAsarPath) {
 diff --git a/scripts/lib/public-config.test.ts b/scripts/lib/public-config.test.ts
-index 2770e34..4368847 100644
+index 2770e345..43688478 100644
 --- a/scripts/lib/public-config.test.ts
 +++ b/scripts/lib/public-config.test.ts
 @@ -16,40 +16,36 @@ afterEach(() => {
@@ -5269,7 +5028,7 @@ index 2770e34..4368847 100644
  });
  
 diff --git a/scripts/lib/public-config.ts b/scripts/lib/public-config.ts
-index 7fe8d05..24e67a1 100644
+index 7fe8d053..24e67a1f 100644
 --- a/scripts/lib/public-config.ts
 +++ b/scripts/lib/public-config.ts
 @@ -4,23 +4,18 @@ import * as NodePath from "node:path";

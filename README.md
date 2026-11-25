@@ -1,6 +1,6 @@
 # t3code-libre
 
-A private build of [T3 Code](https://github.com/pingdotgg/t3code) (v0.1.11): upstream source
+A private build of [T3 Code](https://github.com/pingdotgg/t3code) (v0.1.12): upstream source
 plus a set of patches. This repo holds only the patches and packaging, not the source itself.
 
 ## Downloads
@@ -12,7 +12,7 @@ from this repo ([workflow](.github/workflows/release.yml)), so you can check whe
 
 ```sh
 sha256sum -c SHA256SUMS --ignore-missing
-gh attestation verify T3-Code-libre-0.1.11-1-x86_64.AppImage --repo realazizk/t3code-libre
+gh attestation verify T3-Code-libre-0.1.12-1-x86_64.AppImage --repo realazizk/t3code-libre
 ```
 
 The Windows installer is not code-signed, so SmartScreen warns the first time you run it.
@@ -48,8 +48,8 @@ dependency check: `PATH=/path/to/node26/bin:$PATH makepkg -sid`.
 ## Getting the patched source (Windows, macOS, Android, other Linux)
 
 ```sh
-scripts/prepare-source.sh          # → build/t3code-0.1.11
-cd build/t3code-0.1.11
+scripts/prepare-source.sh          # → build/t3code-0.1.12
+cd build/t3code-0.1.12
 ../../scripts/ci/install-toolchain.sh   # pinned pnpm + vite-plus, then the workspace install
 export PATH="$PWD/../toolchain/node_modules/.bin:$PATH"
 ```
@@ -62,7 +62,7 @@ The script downloads the upstream release tarball, checks it against the sha256 
 From the patched source, after the steps above:
 
 ```sh
-export PKGVER=0.1.11
+export PKGVER=0.1.12
 ../../scripts/ci/build-desktop.sh linux AppImage      # other Linux distros
 ../../scripts/ci/build-desktop.sh win nsis            # on Windows, in Git Bash
 ../../scripts/ci/build-desktop.sh mac dmg arm64       # on a Mac; x64 for Intel
@@ -109,7 +109,7 @@ bump `pkgrel`, and run `makepkg --printsrcinfo > .SRCINFO`.
 
 ## Releasing
 
-Push a tag named after the PKGBUILD version, e.g. `v0.1.11-1`. The workflow builds everything,
+Push a tag named after the PKGBUILD version, e.g. `v0.1.12-1`. The workflow builds everything,
 writes `SHA256SUMS`, attests each file's build provenance and publishes the release.
 
 The APK is built unsigned, then a separate job that runs only `zipalign` and `apksigner` signs it,

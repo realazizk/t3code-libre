@@ -14,7 +14,7 @@
 # ImageMagick (icon set), git.
 
 pkgname=t3code
-pkgver=0.1.11
+pkgver=0.1.12
 pkgrel=1
 pkgdesc='Desktop control surface for local coding agents (private build: no telemetry, accounts, or cloud relay)'
 arch=('x86_64')
@@ -77,14 +77,14 @@ source=(
   't3code.sh'
   't3code.desktop'
 )
-sha256sums=('9c1bbaa24a12c357d073125d74b4a7829a83654cda3536e60e5ceccab3b12358'
-            'a7094263067aa966cb0c70bf1f5cd73eb3807b38513d8b4571e43bfa93f4e617'
-            'be45d8e36c678868cbe4ad1ba3fcc08bc4f7094d01ac4c0c23e3fd4f46a73f12'
-            'd74c241fad4e1e4c7bfc9454cbf956d87b2472370632bd8b4187194c918a4adb'
-            'f50459c97f25f6fafd7de1e0d72e7e48464a48f931fb5c22cea847056a652a4e'
-            'a12fcf6d345e5f46be18888b472a24649b54b1ca163d109cb7b68da2a9e7f07d'
-            '723abd74d6629e785c386270ee2244ff07f38dbd492924755bf2f11716701053'
-            '4fdb97e693becc69544f6c2315067961020c564333264b7401de2b4568d51d47'
+sha256sums=('c57a856c2104ad5e3fcdcf96239b2d688521fc7450a69cdeb17844bcb13101b3'
+            '450a298a5ee32eda0b6720cb087302a25350019a535ca190855f8ae7e2a4cdbf'
+            '39be8b28ba168178a156b3a2119f62477a2f611a51e7db8200c9fbbc519e18b4'
+            '0d2ffe75d1dd1afd51371ebf1618a8b2f17051e63387458644c96e98cf6167b8'
+            '36eb147843372e534a6c274b2d1d31d4f9accb76898a0b5c25f435f82043331b'
+            '17def80926447d88ebbf87b0440087802267cfa6847bf8a88ed3b56cb5dfbb9c'
+            '4e8d6d577ac9bbb41eba2dceabbcdbeecc8ef723539e87d53968f3153cd290ed'
+            '7f0b76aaef218371502f062894f08ea93ee8eec1ea5c536bc77c105f38e8b278'
             '3c3349d80453f2c372e16782a914b8742c3b68faac0e15555008cef6e1bc5814'
             'b32e0562db7e04fb98075a6aa7b3978d293d3c52a303c8d062bd1fb4331205e4')
 
@@ -113,6 +113,8 @@ prepare() {
 
 build() {
   cd "t3code-$pkgver"
+  # Keep the workspace's prepare step (vp config) from installing git hooks into an enclosing clone.
+  export GIT_CEILING_DIRECTORIES="$srcdir"
   export T3CODE_TELEMETRY_CHANNEL=stable
   export ELECTRON_SKIP_BINARY_DOWNLOAD=1
   export npm_config_cache="$srcdir/npm-cache"

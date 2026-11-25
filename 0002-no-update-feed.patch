@@ -1,4 +1,4 @@
-From f5b1a57118ed52641cf3808dd2fcdcc42f039bfe Mon Sep 17 00:00:00 2001
+From eff58f28100ad145139892e417762aa93324f329 Mon Sep 17 00:00:00 2001
 From: pkg <pkg@localhost>
 Date: Tue, 24 Nov 2026 17:25:59 +0100
 Subject: [PATCH 2/7] no GitHub update feed in builds
@@ -8,10 +8,10 @@ Subject: [PATCH 2/7] no GitHub update feed in builds
  1 file changed, 7 insertions(+), 12 deletions(-)
 
 diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
-index 9d34e24..b1b389a 100644
+index 1d334ad9..61daf9cb 100644
 --- a/scripts/build-desktop-artifact.ts
 +++ b/scripts/build-desktop-artifact.ts
-@@ -2819,18 +2819,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+@@ -2852,18 +2852,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
    const updateChannel = resolveDesktopUpdateChannel(version);
    // Missing publish config infers a GitHub feed from tokens; staging has no repository, so manifest generation would crash.
    buildConfig.publish = null;

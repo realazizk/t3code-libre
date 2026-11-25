@@ -7,7 +7,7 @@ set -euo pipefail
 platform="$1"
 target="$2"
 arch="${3:-x64}"
-version="${PKGVER:?set PKGVER to the upstream version, e.g. 0.1.11}"
+version="${PKGVER:?set PKGVER to the upstream version, e.g. 0.1.12}"
 
 "$(dirname "${BASH_SOURCE[0]}")/install-toolchain.sh"
 export PATH="$(cd .. && pwd)/toolchain/node_modules/.bin:$PATH"

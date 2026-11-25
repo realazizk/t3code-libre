@@ -1,4 +1,4 @@
-From f633fe7e33ec78402a21cbbbbe0b62d8cc2a36f1 Mon Sep 17 00:00:00 2001
+From 11c7e5bbd879860709fdb8ea63fafa5b8a44d2c1 Mon Sep 17 00:00:00 2001
 From: pkg <pkg@localhost>
 Date: Wed, 11 Nov 2026 18:08:52 +0100
 Subject: [PATCH 5/7] tailnet: pair by MagicDNS or tailnet hostname over http
@@ -15,7 +15,7 @@ Subject: [PATCH 5/7] tailnet: pair by MagicDNS or tailnet hostname over http
  7 files changed, 116 insertions(+), 22 deletions(-)
 
 diff --git a/apps/desktop/src/backend/DesktopServerExposure.test.ts b/apps/desktop/src/backend/DesktopServerExposure.test.ts
-index c222237..274b9d2 100644
+index c222237d..274b9d26 100644
 --- a/apps/desktop/src/backend/DesktopServerExposure.test.ts
 +++ b/apps/desktop/src/backend/DesktopServerExposure.test.ts
 @@ -475,6 +475,7 @@ describe("DesktopServerExposure", () => {
@@ -27,7 +27,7 @@ index c222237..274b9d2 100644
                ],
              );
 diff --git a/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts b/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
-index 397a757..e3176de 100644
+index 397a7577..e3176de6 100644
 --- a/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
 +++ b/apps/desktop/src/backend/tailscaleEndpointProvider.test.ts
 @@ -37,6 +37,37 @@ describe("tailscale endpoint provider", () => {
@@ -69,7 +69,7 @@ index 397a757..e3176de 100644
      Effect.gen(function* () {
        for (const interfaceName of ["tailscale0", "Tailscale"]) {
 diff --git a/apps/desktop/src/backend/tailscaleEndpointProvider.ts b/apps/desktop/src/backend/tailscaleEndpointProvider.ts
-index 1b8d9df..e9a76cf 100644
+index 1b8d9dff..e9a76cf5 100644
 --- a/apps/desktop/src/backend/tailscaleEndpointProvider.ts
 +++ b/apps/desktop/src/backend/tailscaleEndpointProvider.ts
 @@ -85,6 +85,27 @@ const probeServesThisBackend = (localHttpUrl: string) => (baseUrl: string) =>
@@ -124,10 +124,10 @@ index 1b8d9df..e9a76cf 100644
    },
  );
 diff --git a/apps/mobile/src/features/connection/pairing.test.ts b/apps/mobile/src/features/connection/pairing.test.ts
-index 466fbfa..a5f9766 100644
+index a3f2fab4..571d3368 100644
 --- a/apps/mobile/src/features/connection/pairing.test.ts
 +++ b/apps/mobile/src/features/connection/pairing.test.ts
-@@ -15,6 +15,15 @@ describe("buildPairingUrl", () => {
+@@ -16,6 +16,15 @@ describe("buildPairingUrl", () => {
      );
    });
  
@@ -144,7 +144,7 @@ index 466fbfa..a5f9766 100644
      expect(buildPairingUrl("https://192.168.1.100:3773", "pairing-token")).toBe(
        "https://192.168.1.100:3773/#token=pairing-token",
 diff --git a/apps/mobile/src/features/connection/pairing.ts b/apps/mobile/src/features/connection/pairing.ts
-index d596343..34bec26 100644
+index 2d9b129a..39163407 100644
 --- a/apps/mobile/src/features/connection/pairing.ts
 +++ b/apps/mobile/src/features/connection/pairing.ts
 @@ -1,4 +1,4 @@
@@ -181,11 +181,11 @@ index d596343..34bec26 100644
    try {
 -    const url = new URL(h.includes("://") ? h : `${isIpLiteral(h) ? "http" : "https"}://${h}`);
 +    const url = new URL(h.includes("://") ? h : `${defaultSchemeForHost(h)}://${h}`);
+     // The code goes to the address shown, so a query cannot name another destination.
+     url.search = "";
      url.hash = new URLSearchParams([["token", c]]).toString();
-     return url.toString();
-   } catch {
 diff --git a/packages/shared/src/remote.test.ts b/packages/shared/src/remote.test.ts
-index 30f30a2..b53f957 100644
+index 30f30a2a..b53f9570 100644
 --- a/packages/shared/src/remote.test.ts
 +++ b/packages/shared/src/remote.test.ts
 @@ -107,11 +107,28 @@ describe("remote", () => {
@@ -220,7 +220,7 @@ index 30f30a2..b53f957 100644
      let pairingUrlError: unknown;
      try {
 diff --git a/packages/shared/src/remote.ts b/packages/shared/src/remote.ts
-index 69439fe..5b9831c 100644
+index 69439fed..5b9831c4 100644
 --- a/packages/shared/src/remote.ts
 +++ b/packages/shared/src/remote.ts
 @@ -76,6 +76,25 @@ export type RemotePairingTargetError = typeof RemotePairingTargetError.Type;

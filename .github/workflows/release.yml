@@ -1,7 +1,7 @@
 # Builds every package from the same patched source and, for a v* tag, publishes them
 # as a GitHub release with SHA256SUMS and signed build provenance (artifact attestations).
 #
-#   Release:   git tag v0.1.11-1 && git push origin v0.1.11-1   (tag = v<pkgver>-<pkgrel>)
+#   Release:   git tag v0.1.12-1 && git push origin v0.1.12-1   (tag = v<pkgver>-<pkgrel>)
 #   Test run:  Actions > Release > Run workflow (builds and uploads artifacts, no release)
 #
 # Android is off until its build fits a standard runner; set the repository variable
