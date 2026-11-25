@@ -74,8 +74,7 @@ jobs:
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    # On the bare runner this build keeps dropping the runner offline ("lost communication"); the
-    # same build in a container (like the Arch job) is reliable. Ubuntu 24.04 keeps glibc at 2.39.
+    # Ubuntu 24.04 keeps glibc at 2.39, so the AppImage runs on older distributions too.
     container: ubuntu:24.04
     env:
       PKGVER: ${{ needs.source.outputs.pkgver }}
@@ -103,13 +102,17 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: build/t3code-${{ env.PKGVER }}/package.json
+      # Build outside the checkout: inside it (where .gitignore lists /build/) the web bundle build
+      # balloons past 16 GB and is OOM-killed; outside any git repo it peaks around 5.5 GB.
       - name: Build
-        working-directory: build/t3code-${{ env.PKGVER }}
-        run: ../../scripts/ci/build-desktop.sh linux AppImage
+        run: |
+          mv build /tmp/build
+          cd "/tmp/build/t3code-$PKGVER"
+          "$GITHUB_WORKSPACE/scripts/ci/build-desktop.sh" linux AppImage
       - name: Collect
         run: |
           mkdir -p dist
-          cp build/artifacts/*.AppImage "dist/T3-Code-libre-$VERSION-x86_64.AppImage"
+          cp /tmp/build/artifacts/*.AppImage "dist/T3-Code-libre-$VERSION-x86_64.AppImage"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-appimage
