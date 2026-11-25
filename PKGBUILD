@@ -125,6 +125,9 @@ build() {
   pnpm_version="$(sed -n 's/.*"packageManager": "pnpm@\([^"]*\)".*/\1/p' package.json)"
   vp_version="$(sed -n 's/^  vite-plus: \([0-9][^ ]*\)$/\1/p' pnpm-workspace.yaml)"
   npm install --prefix "$srcdir/toolchain" "vite-plus@$vp_version" "pnpm@$pnpm_version"
+  # npm releases that block install scripts leave pnpm's shebang-less placeholder, which vp
+  # cannot exec; pnpm's own setup links the native binary in its place.
+  node "$srcdir/toolchain/node_modules/pnpm/install.js"
   export PATH="$srcdir/toolchain/node_modules/.bin:$PATH"
 
   # Full workspace install: the desktop bundle builds against server + web.
